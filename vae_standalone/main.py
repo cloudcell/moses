@@ -6,6 +6,7 @@ from data_loader import get_data_loaders
 from utils import Logger
 import argparse
 from tqdm import tqdm
+from rdkit import Chem
 
 # Load SMILES from a text file (one per line)
 def load_smiles_file(path, limit=None):
@@ -64,9 +65,10 @@ def main():
         print(f"Resuming from epoch {start_epoch}")
 
     logger = Logger()
-    for epoch in range(start_epoch, args.epochs):
+    end_epoch = start_epoch + args.epochs
+    for epoch in range(start_epoch, end_epoch):
         kl_weight = kl_annealer(epoch)
-        print(f"Epoch {epoch+1}/{args.epochs} (kl_weight={kl_weight:.4f}, lr={optimizer.param_groups[0]['lr']:.6f})")
+        print(f"Epoch {epoch+1}/{end_epoch} (kl_weight={kl_weight:.4f}, lr={optimizer.param_groups[0]['lr']:.6f})")
         # --- Training ---
         model.train()
         train_iter = tqdm(train_loader, desc=f'Train (epoch {epoch+1})', leave=False)
@@ -125,19 +127,43 @@ def main():
         test_kl_weight = kl_annealer(args.epochs-1)
     else:
         test_kl_weight = 1.0
-    with torch.no_grad():
-        for batch in test_iter:
-            batch = [b.to(args.device) for b in batch]
-            kl_loss, recon_loss = model(batch)
-            test_loss = test_kl_weight * kl_loss + recon_loss
-            test_losses.append(test_loss.item())
-            test_iter.set_postfix(loss=test_loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
-    mean_test_loss = sum(test_losses) / len(test_losses) if test_losses else float('nan')
-    print(f"Test Loss: {mean_test_loss:.4f}")
+    
+    if 0:
+        with torch.no_grad():
+            for batch in test_iter:
+                batch = [b.to(args.device) for b in batch]
+                kl_loss, recon_loss = model(batch)
+                test_loss = test_kl_weight * kl_loss + recon_loss
+                test_losses.append(test_loss.item())
+                test_iter.set_postfix(loss=test_loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
+        mean_test_loss = sum(test_losses) / len(test_losses) if test_losses else float('nan')
+        print(f"Test Loss: {mean_test_loss:.4f}")
 
     import random
-    print("\nReconstructions for 10 random test samples:")
-    random_indices = random.sample(range(len(test_smiles)), 10)
+    def is_valid_smiles(smiles):
+        from rdkit import Chem
+        import rdkit
+        from contextlib import contextmanager
+        import sys, os
+        @contextmanager
+        def suppress_stderr():
+            with open(os.devnull, 'w') as devnull:
+                old_stderr = sys.stderr
+                sys.stderr = devnull
+                try:
+                    yield
+                finally:
+                    sys.stderr = old_stderr
+        with suppress_stderr():
+            m = Chem.MolFromSmiles(smiles)
+        return m is not None
+
+
+    # also, count the number of valid reconstructions
+    valid_reconstructions_cnt = 0
+    valid_smiles_cnt = 0
+    print("\nReconstructions for 100 random test samples:")
+    random_indices = random.sample(range(len(test_smiles)), 100)
     with torch.no_grad():
         for idx in random_indices:
             s = test_smiles[idx]
@@ -147,7 +173,15 @@ def main():
                 z, _ = model.forward_encoder([input_tensor.squeeze(0)])
                 out = model.sample(1, max_len=len(s)+5, z=z)
             print(f"IN : {s}")
-            print(f"OUT: {out[0]}")
+            print(f"OUT: {out[0]}", end='')
+            print("\tvalid" if is_valid_smiles(out[0]) else "\tinvalid")
+            if is_valid_smiles(out[0]):
+                valid_smiles_cnt += 1
+            # if in == out, count as valid reconstruction
+            if s == out[0]:
+                valid_reconstructions_cnt += 1
+    print(f"Valid smiles: {valid_smiles_cnt}/{100}")
+    print(f"Valid reconstructions: {valid_reconstructions_cnt}/{100}")
 
 if __name__ == '__main__':
     main()
