@@ -7,4 +7,7 @@ moses.egg-info/
 venv
 *.smi
 *.txt
-
+*.pt
+*.csv
+*.log
+*.png

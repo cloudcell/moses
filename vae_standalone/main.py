@@ -5,48 +5,72 @@ from config import get_default_config
 from data_loader import get_data_loaders
 from utils import Logger
 import argparse
+from tqdm import tqdm
 
-# Example toy data (replace with real SMILES data for production)
-def get_toy_data():
-    return [
-        'CCO', 'CCN', 'CCC', 'CCCl', 'CCBr',
-        'C1CC1', 'C1CCO1', 'C1CCN1', 'C1CCC1', 'C1CCCl1',
-    ]
+# Load SMILES from a text file (one per line)
+def load_smiles_file(path, limit=None):
+    smiles = []
+    with open(path, 'r') as f:
+        for i, line in enumerate(f):
+            if limit is not None and i >= limit:
+                break
+            s = line.strip()
+            if s:
+                smiles.append(s)
+    return smiles
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
 
-    train_data = get_toy_data()
-    # Simple train/val split for toy data
-    split_idx = int(0.8 * len(train_data))
-    train_smiles = train_data[:split_idx]
-    val_smiles = train_data[split_idx:]
+    # Set thread count if using CPU
+    if args.device == 'cpu':
+        torch.set_num_threads(126)
+
+    # Load real dataset splits
+    train_smiles = load_smiles_file('data_trn.txt')
+    val_smiles = load_smiles_file('data_val.txt')
+    test_smiles = load_smiles_file('data_tst.txt')
     train_loader, vocab = get_data_loaders(train_smiles, batch_size=args.batch_size)
     val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, vocab=vocab)
+    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, vocab=vocab)
 
     config = get_default_config()
     model = VAE(vocab, config).to(args.device)
-    # trainer = VAETrainer(config)
-
-    logger = Logger()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_start)
     from misc import KLAnnealer, CosineAnnealingLRWithRestart
     kl_annealer = KLAnnealer(args.epochs, config)
     lr_scheduler = CosineAnnealingLRWithRestart(optimizer, config)
-    import os
+    import os, glob
     checkpoint_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
     best_val_loss = float('inf')
-    for epoch in range(args.epochs):
+
+    # --- Checkpoint loading ---
+    start_epoch = 0
+    checkpoint_files = sorted(glob.glob(os.path.join(checkpoint_dir, 'model_epoch_*.pt')),
+                              key=lambda x: int(os.path.basename(x).split('_')[-1].split('.')[0]))
+    if checkpoint_files:
+        latest_ckpt = checkpoint_files[-1]
+        print(f"Loading checkpoint: {latest_ckpt}")
+        checkpoint = torch.load(latest_ckpt, map_location=args.device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch']
+        best_val_loss = checkpoint.get('val_loss', float('inf'))
+        print(f"Resuming from epoch {start_epoch}")
+
+    logger = Logger()
+    for epoch in range(start_epoch, args.epochs):
         kl_weight = kl_annealer(epoch)
         print(f"Epoch {epoch+1}/{args.epochs} (kl_weight={kl_weight:.4f}, lr={optimizer.param_groups[0]['lr']:.6f})")
         # --- Training ---
         model.train()
-        for batch in train_loader:
+        train_iter = tqdm(train_loader, desc=f'Train (epoch {epoch+1})', leave=False)
+        for batch in train_iter:
             batch = [b.to(args.device) for b in batch]
             optimizer.zero_grad()
             kl_loss, recon_loss = model(batch)
@@ -54,18 +78,21 @@ def main():
             loss.backward()
             optimizer.step()
             logger.append({'kl_loss': kl_loss.item(), 'recon_loss': recon_loss.item(), 'loss': loss.item(), 'kl_weight': kl_weight, 'lr': optimizer.param_groups[0]['lr'], 'mode': 'train'})
+            train_iter.set_postfix(loss=loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
         lr_scheduler.step()
         print(f"Train Loss: {loss.item():.4f}")
         # --- Validation ---
         model.eval()
         val_losses = []
+        val_iter = tqdm(val_loader, desc=f'Val (epoch {epoch+1})', leave=False)
         with torch.no_grad():
-            for batch in val_loader:
+            for batch in val_iter:
                 batch = [b.to(args.device) for b in batch]
                 kl_loss, recon_loss = model(batch)
                 val_loss = kl_weight * kl_loss + recon_loss
                 val_losses.append(val_loss.item())
                 logger.append({'kl_loss': kl_loss.item(), 'recon_loss': recon_loss.item(), 'loss': val_loss.item(), 'kl_weight': kl_weight, 'lr': optimizer.param_groups[0]['lr'], 'mode': 'val'})
+                val_iter.set_postfix(loss=val_loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
         mean_val_loss = sum(val_losses) / len(val_losses) if val_losses else float('nan')
         print(f"Val Loss: {mean_val_loss:.4f}")
         # --- Checkpoint ---
@@ -88,34 +115,39 @@ def main():
             }, os.path.join(checkpoint_dir, "best_model.pt"))
     logger.save('train_log.csv')
 
-    # After training, print reconstructions and random samples
+    # After training, evaluate on test set
+    print("\nTest set evaluation:")
     model.eval()
+    test_losses = []
+    test_iter = tqdm(test_loader, desc='Test', leave=False)
+    # Determine kl_weight for test (use last epoch or default 1.0)
+    if args.epochs > 0:
+        test_kl_weight = kl_annealer(args.epochs-1)
+    else:
+        test_kl_weight = 1.0
     with torch.no_grad():
-        print("\nOriginal vs Reconstruction:")
-        for batch in train_loader:
+        for batch in test_iter:
             batch = [b.to(args.device) for b in batch]
-            z, _ = model.forward_encoder(batch)
-            lengths = [len(x) for x in batch]
-            x_padded = torch.nn.utils.rnn.pad_sequence(batch, batch_first=True, padding_value=model.pad)
-            x_emb = model.x_emb(x_padded)
-            z_0 = z.unsqueeze(1).repeat(1, x_emb.size(1), 1)
-            x_input = torch.cat([x_emb, z_0], dim=-1)
-            x_input = torch.nn.utils.rnn.pack_padded_sequence(x_input, lengths, batch_first=True, enforce_sorted=False)
-            h_0 = model.decoder_lat(z)
-            h_0 = h_0.unsqueeze(0).repeat(model.decoder_rnn.num_layers, 1, 1)
-            output, _ = model.decoder_rnn(x_input, h_0)
-            output, _ = torch.nn.utils.rnn.pad_packed_sequence(output, batch_first=True)
-            y = model.decoder_fc(output)
-            pred = y.argmax(-1)
-            for inp, out in zip(batch, pred):
-                print("IN :", model.tensor2string(inp))
-                print("OUT:", model.tensor2string(out))
-            break  # Only show one batch
+            kl_loss, recon_loss = model(batch)
+            test_loss = test_kl_weight * kl_loss + recon_loss
+            test_losses.append(test_loss.item())
+            test_iter.set_postfix(loss=test_loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
+    mean_test_loss = sum(test_losses) / len(test_losses) if test_losses else float('nan')
+    print(f"Test Loss: {mean_test_loss:.4f}")
 
-        print("\nRandom samples from latent space:")
-        samples = model.sample(5)
-        for s in samples:
-            print(s)
+    import random
+    print("\nReconstructions for 10 random test samples:")
+    random_indices = random.sample(range(len(test_smiles)), 10)
+    with torch.no_grad():
+        for idx in random_indices:
+            s = test_smiles[idx]
+            input_tensor = model.string2tensor(s, device=args.device).unsqueeze(0)
+            # Encode to latent z, then decode for reconstruction
+            with torch.no_grad():
+                z, _ = model.forward_encoder([input_tensor.squeeze(0)])
+                out = model.sample(1, max_len=len(s)+5, z=z)
+            print(f"IN : {s}")
+            print(f"OUT: {out[0]}")
 
 if __name__ == '__main__':
     main()

@@ -15,13 +15,13 @@ class StringDataset(Dataset):
     def __getitem__(self, idx):
         return self.tokens[idx]
 
-def get_data_loaders(train_data, batch_size=64, shuffle=True):
-    train_dataset = StringDataset(train_data)
-    vocab = train_dataset.vocab
-    train_loader = DataLoader(
-        train_dataset,
+def get_data_loaders(data, batch_size=64, shuffle=True, vocab=None):
+    dataset = StringDataset(data, vocab=vocab)
+    vocab = dataset.vocab
+    loader = DataLoader(
+        dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         collate_fn=lambda batch: [torch.tensor(seq, dtype=torch.long) for seq in batch]
     )
-    return train_loader, vocab
+    return loader, vocab
