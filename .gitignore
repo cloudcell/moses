@@ -5,4 +5,6 @@ build/
 dist/
 moses.egg-info/
 venv
+*.smi
+*.txt
 
