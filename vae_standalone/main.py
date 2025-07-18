@@ -7,6 +7,10 @@ from utils import Logger
 import argparse
 from tqdm import tqdm
 from rdkit import Chem
+from rdkit import RDLogger
+RDLogger.DisableLog('rdApp.*')
+# import random
+import numpy as np
 
 # Load SMILES from a text file (one per line)
 def load_smiles_file(path, limit=None):
@@ -25,11 +29,19 @@ def main():
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--device', type=str, default='cpu')
+    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
     # Set thread count if using CPU
     if args.device == 'cpu':
         torch.set_num_threads(126)
+    
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # random.seed(args.seed)
+    np.random.seed(args.seed)
 
     # Load real dataset splits
     train_smiles = load_smiles_file('data_trn.txt')
@@ -120,15 +132,15 @@ def main():
     # After training, evaluate on test set
     print("\nTest set evaluation:")
     model.eval()
-    test_losses = []
-    test_iter = tqdm(test_loader, desc='Test', leave=False)
-    # Determine kl_weight for test (use last epoch or default 1.0)
-    if args.epochs > 0:
-        test_kl_weight = kl_annealer(args.epochs-1)
-    else:
-        test_kl_weight = 1.0
-    
     if 0:
+        test_losses = []
+        test_iter = tqdm(test_loader, desc='Test', leave=False)
+        # Determine kl_weight for test (use last epoch or default 1.0)
+        if args.epochs > 0:
+            test_kl_weight = kl_annealer(args.epochs-1)
+        else:
+            test_kl_weight = 1.0
+    
         with torch.no_grad():
             for batch in test_iter:
                 batch = [b.to(args.device) for b in batch]
@@ -139,7 +151,6 @@ def main():
         mean_test_loss = sum(test_losses) / len(test_losses) if test_losses else float('nan')
         print(f"Test Loss: {mean_test_loss:.4f}")
 
-    import random
     def is_valid_smiles(smiles):
         from rdkit import Chem
         import rdkit
@@ -162,26 +173,63 @@ def main():
     # also, count the number of valid reconstructions
     valid_reconstructions_cnt = 0
     valid_smiles_cnt = 0
-    print("\nReconstructions for 100 random test samples:")
-    random_indices = random.sample(range(len(test_smiles)), 100)
-    with torch.no_grad():
-        for idx in random_indices:
-            s = test_smiles[idx]
-            input_tensor = model.string2tensor(s, device=args.device).unsqueeze(0)
-            # Encode to latent z, then decode for reconstruction
-            with torch.no_grad():
-                z, _ = model.forward_encoder([input_tensor.squeeze(0)])
-                out = model.sample(1, max_len=len(s)+5, z=z)
-            print(f"IN : {s}")
-            print(f"OUT: {out[0]}", end='')
-            print("\tvalid" if is_valid_smiles(out[0]) else "\tinvalid")
-            if is_valid_smiles(out[0]):
-                valid_smiles_cnt += 1
-            # if in == out, count as valid reconstruction
-            if s == out[0]:
-                valid_reconstructions_cnt += 1
-    print(f"Valid smiles: {valid_smiles_cnt}/{100}")
-    print(f"Valid reconstructions: {valid_reconstructions_cnt}/{100}")
+    edit_distance_sum = 0
+    try:
+        import editdistance
+        def edit_distance(a, b):
+            return editdistance.eval(a, b)
+    except ImportError:
+        from difflib import SequenceMatcher
+        def edit_distance(a, b):
+            # Approximate Levenshtein distance using SequenceMatcher
+            # (not exactly the same, but gives an idea if editdistance is not installed)
+            sm = SequenceMatcher(None, a, b)
+            return max(len(a), len(b)) - int(sm.ratio() * max(len(a), len(b)))
+
+    import datetime
+    log_dir = os.path.join(os.path.dirname(__file__), 'test_results')
+    os.makedirs(log_dir, exist_ok=True)
+    current_epoch = start_epoch if 'start_epoch' in locals() else 0
+    now = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_filename = f"epoch_{current_epoch}_{now}.log"
+    log_path = os.path.join(log_dir, log_filename)
+
+    with open(log_path, 'w') as log_f:
+        log_f.write(f"Reconstructions for 1000 first test samples (epoch {current_epoch}):\n")
+        random_indices = range(1000)
+        with torch.no_grad():
+            # use tqdm
+            for idx in tqdm(random_indices):
+                s = test_smiles[idx]
+                input_tensor = model.string2tensor(s, device=args.device).unsqueeze(0)
+                with torch.no_grad():
+                    z, _ = model.forward_encoder(input_tensor)
+                    out = model.sample(1, max_len=len(s)+10, z=z)  # contains .forward_decoder and returns strings
+                    out = out[0]
+                valid = is_valid_smiles(out)
+                log_f.write(f"IN : {s}\n")
+                log_f.write(f"OUT: {out}\t{'valid' if valid else 'invalid'}\n")
+                if valid:
+                    valid_smiles_cnt += 1
+                if s == out:
+                    valid_reconstructions_cnt += 1
+
+                # calculate the edit distance
+                edit_dist = edit_distance(s, out)
+                edit_distance_sum += edit_dist
+                log_f.write(f"Edit distance: {edit_dist}\n")
+
+                # update tqdm string
+                # tqdm.write(f"Valid smiles: {valid_smiles_cnt}, Valid reconstructions: {valid_reconstructions_cnt}/1000, Total Edit distance: {edit_distance_sum}")
+
+        log_f.write(f"Valid smiles: {valid_smiles_cnt}/1000\n")
+        log_f.write(f"Valid reconstructions: {valid_reconstructions_cnt}/1000\n")
+        log_f.write(f"Total Edit distance: {edit_distance_sum}\n")
+
+    print(f"Test results logged to {log_path}")
+    print(f"Valid smiles: {valid_smiles_cnt}/1000")
+    print(f"Valid reconstructions: {valid_reconstructions_cnt}/1000")
+    print(f"Total Edit distance: {edit_distance_sum}")
 
 if __name__ == '__main__':
     main()
