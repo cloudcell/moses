@@ -174,6 +174,8 @@ def main():
     valid_reconstructions_cnt = 0
     valid_smiles_cnt = 0
     edit_distance_sum = 0
+    edit_distance_min = float('inf')
+    edit_distance_max = float('-inf')
     try:
         import editdistance
         def edit_distance(a, b):
@@ -211,12 +213,16 @@ def main():
                 log_f.write(f"OUT: {out}\t{'valid' if valid else 'invalid'}\n")
                 if valid:
                     valid_smiles_cnt += 1
-                if s == out:
+
+                # check if the reconstruction is the same as the input using both canonical smiles
+                if Chem.MolFromSmiles(s) == Chem.MolFromSmiles(out):
                     valid_reconstructions_cnt += 1
 
                 # calculate the edit distance
                 edit_dist = edit_distance(s, out)
                 edit_distance_sum += edit_dist
+                edit_distance_min = min(edit_distance_min, edit_dist)
+                edit_distance_max = max(edit_distance_max, edit_dist)
                 log_f.write(f"Edit distance: {edit_dist}\n")
 
                 # update tqdm string
@@ -225,11 +231,15 @@ def main():
         log_f.write(f"Valid smiles: {valid_smiles_cnt}/1000\n")
         log_f.write(f"Valid reconstructions: {valid_reconstructions_cnt}/1000\n")
         log_f.write(f"Total Edit distance: {edit_distance_sum}\n")
+        log_f.write(f"Min Edit distance: {edit_distance_min}\n")
+        log_f.write(f"Max Edit distance: {edit_distance_max}\n")
 
     print(f"Test results logged to {log_path}")
     print(f"Valid smiles: {valid_smiles_cnt}/1000")
     print(f"Valid reconstructions: {valid_reconstructions_cnt}/1000")
     print(f"Total Edit distance: {edit_distance_sum}")
+    print(f"Min Edit distance: {edit_distance_min}")
+    print(f"Max Edit distance: {edit_distance_max}")
 
 if __name__ == '__main__':
     main()
