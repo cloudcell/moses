@@ -1,0 +1,8 @@
+torch
+scipy
+pandas
+pomegranate
+matplotlib
+fcd_torch
+rdkit
+
