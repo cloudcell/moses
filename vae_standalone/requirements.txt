@@ -1,0 +1,6 @@
+torch
+scipy
+pandas
+matplotlib
+numpy
+rdkit
