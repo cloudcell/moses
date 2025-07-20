@@ -34,11 +34,10 @@ class VAETrainer:
             total_recon += recon_loss.item() * batch_size
             total_samples += batch_size
             train_iter.set_postfix({
-                # as 6 digits after the decimal point
-                'loss': f"{loss.item():.6f}", 
-                'kl': f"{kl_loss.item():.6f}", 
-                'recon': f"{recon_loss.item():.6f}", 
-                'lr': f"{optimizer.param_groups[0]['lr']:.6f}", 
+                'loss': f"{total_loss / max(1, total_samples):.6f}",
+                'kl': f"{total_kl / max(1, total_samples):.6f}",
+                'recon': f"{total_recon / max(1, total_samples):.6f}",
+                'lr': f"{optimizer.param_groups[0]['lr']:.6f}",
             })
         epoch_avg_loss = total_loss / max(1, total_samples)
         epoch_avg_kl = total_kl / max(1, total_samples)
@@ -65,11 +64,14 @@ class VAETrainer:
             stats = self._train_epoch(model, epoch, train_loader, optimizer)
             # After each epoch, evaluate on validation set to get val_loss
             model.eval()
+            # Use identical structure to _train_epoch for validation
+            kl_loss_values = CircularBuffer(self.config.n_last)
+            recon_loss_values = CircularBuffer(self.config.n_last)
+            loss_values = CircularBuffer(self.config.n_last)
             val_loss = 0.0
             val_kl = 0.0
             val_recon = 0.0
             val_samples = 0
-            val_batches = 0
             from tqdm import tqdm
             with torch.no_grad():
                 val_iter = tqdm(val_loader, desc=f"Val (epoch {epoch+1})")
@@ -78,27 +80,35 @@ class VAETrainer:
                     batch_size = batch[0].size(0) if hasattr(batch[0], 'size') else len(batch[0])
                     kl_loss, recon_loss = model(batch)
                     loss = kl_loss + recon_loss
+                    kl_loss_values.add(kl_loss.item())
+                    recon_loss_values.add(recon_loss.item())
+                    loss_values.add(loss.item())
                     val_loss += loss.item() * batch_size
                     val_kl += kl_loss.item() * batch_size
                     val_recon += recon_loss.item() * batch_size
                     val_samples += batch_size
-                    val_batches += 1
                     val_iter.set_postfix({
-                        # as 6 digits after the decimal point
-                        'loss': f"{loss.item():.6f}", 
-                        'kl': f"{kl_loss.item():.6f}", 
-                        'recon': f"{recon_loss.item():.6f}", 
-                        'lr': f"{optimizer.param_groups[0]['lr']:.6f}", 
+                        'loss': f"{val_loss / max(1, val_samples):.6f}",
+                        'kl': f"{val_kl / max(1, val_samples):.6f}",
+                        'recon': f"{val_recon / max(1, val_samples):.6f}",
+                        'lr': f"{optimizer.param_groups[0]['lr']:.6f}",
                     })
             mean_val_loss = val_loss / max(1, val_samples)
             mean_val_kl = val_kl / max(1, val_samples)
             mean_val_recon = val_recon / max(1, val_samples)
             scheduler.step(mean_val_loss)
+            val_stats = {
+                'val_loss': mean_val_loss,
+                'val_kl': mean_val_kl,
+                'val_recon': mean_val_recon,
+                'val_loss_buffer': loss_values.mean(),
+                'val_kl_buffer': kl_loss_values.mean(),
+                'val_recon_buffer': recon_loss_values.mean(),
+            }
             if logger is not None:
-                stats['val_loss'] = mean_val_loss
-                stats['val_kl'] = mean_val_kl
-                stats['val_recon'] = mean_val_recon
+                stats.update(val_stats)
                 logger.append(stats)
+
             # Save checkpoint with full metadata
             if checkpoint_dir is not None:
                 epoch_str = f"{epoch+1:05d}"
