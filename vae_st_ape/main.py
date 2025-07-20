@@ -83,8 +83,8 @@ def main():
     val_smiles = load_smiles_file('data_val.txt')
     test_smiles = load_smiles_file('data_tst.txt')
     train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
-    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
-    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
+    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
+    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
 
     config = get_default_config()
     model = VAE(tokenizer, config).to(args.device)
@@ -215,9 +215,14 @@ def main():
                 if valid:
                     valid_smiles_cnt += 1
 
-                # check if the reconstruction is the same as the input using both canonical smiles
-                if Chem.MolFromSmiles(s) == Chem.MolFromSmiles(out):
-                    valid_reconstructions_cnt += 1
+                # check if the reconstruction is the same as the input using canonical SMILES (chemical equivalence)
+                mol_in = Chem.MolFromSmiles(s)
+                mol_out = Chem.MolFromSmiles(out)
+                if mol_in is not None and mol_out is not None:
+                    can_in = Chem.MolToSmiles(mol_in, canonical=True)
+                    can_out = Chem.MolToSmiles(mol_out, canonical=True)
+                    if can_in == can_out:
+                        valid_reconstructions_cnt += 1
 
                 # calculate the edit distance
                 edit_dist = edit_distance(s, out)

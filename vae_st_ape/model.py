@@ -17,6 +17,9 @@ class VAE(nn.Module):
         # No pretrained vectors: random init
         if getattr(config, 'freeze_embeddings', False):
             self.x_emb.weight.requires_grad = False
+        # the constructor doesn’t need to know the 
+        # sequence length beforehand—it remains dynamic, 
+        # defined by the data given to the GRU in the forward pass.
         if config.q_cell == 'gru':
             self.encoder_rnn = nn.GRU(
                 d_emb,
