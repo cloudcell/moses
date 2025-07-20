@@ -3,15 +3,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class VAE(nn.Module):
-    def __init__(self, vocab, config):
+    def __init__(self, tokenizer, config):
         super().__init__()
-        self.vocabulary = vocab
-        for ss in ('bos', 'eos', 'unk', 'pad'):
-            setattr(self, ss, getattr(vocab, ss))
-        n_vocab, d_emb = len(vocab), vocab.vectors.size(1)
+        self.vocabulary = tokenizer
+        # Use APETokenizer's special token ids
+        self.bos = tokenizer.bos_token_id
+        self.eos = tokenizer.eos_token_id
+        self.pad = tokenizer.pad_token_id
+        self.unk = tokenizer.special_tokens[tokenizer.unk_token] if hasattr(tokenizer, 'special_tokens') else tokenizer.unk_token_id
+        n_vocab = len(tokenizer)
+        d_emb = getattr(config, 'embedding_dim', 256)  # fallback to 256 if not set in config
         self.x_emb = nn.Embedding(n_vocab, d_emb, self.pad)
-        self.x_emb.weight.data.copy_(vocab.vectors)
-        if config.freeze_embeddings:
+        # No pretrained vectors: random init
+        if getattr(config, 'freeze_embeddings', False):
             self.x_emb.weight.requires_grad = False
         if config.q_cell == 'gru':
             self.encoder_rnn = nn.GRU(
@@ -39,6 +43,9 @@ class VAE(nn.Module):
             raise ValueError("Invalid d_cell type, should be one of the ('gru',)")
         self.decoder_lat = nn.Linear(config.d_z, config.d_d_h)
         self.decoder_fc = nn.Linear(config.d_d_h, n_vocab)
+        # Assert output and embedding match vocab size
+        assert self.decoder_fc.out_features == n_vocab, f"decoder_fc out_features ({self.decoder_fc.out_features}) != vocab size ({n_vocab})"
+        assert self.x_emb.num_embeddings == n_vocab, f"embedding num_embeddings ({self.x_emb.num_embeddings}) != vocab size ({n_vocab})"
         self.encoder = nn.ModuleList([
             self.encoder_rnn,
             self.q_mu,
@@ -57,17 +64,30 @@ class VAE(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
-    def string2tensor(self, string, device='model'):
-        ids = self.vocabulary.string2ids(string, add_bos=True, add_eos=True)
+    def string2tensor(self, smiles, device='model'):
+        import selfies
+        # Convert SMILES to SELFIES
+        selfies_str = selfies.encoder(smiles)
+        # Tokenize SELFIES using APETokenizer
+        ids = self.vocabulary.encode(selfies_str, add_special_tokens=True)
         tensor = torch.tensor(
             ids, dtype=torch.long,
             device=self.device if device == 'model' else device
         )
         return tensor
+
     def tensor2string(self, tensor):
+        import selfies
         ids = tensor.tolist()
-        string = self.vocabulary.ids2string(ids, rem_bos=True, rem_eos=True)
-        return string
+        # Convert tokens to SELFIES string
+        selfies_str = ''.join(self.vocabulary.convert_ids_to_tokens(ids))
+        try:
+            # Convert SELFIES back to SMILES
+            smiles = selfies.decoder(selfies_str)
+        except Exception as e:
+            print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
+            smiles = ''  # or None, or '[INVALID]'
+        return smiles
     def forward(self, x):
         z, kl_loss = self.forward_encoder(x)
         recon_loss = self.forward_decoder(x, z)
@@ -130,4 +150,5 @@ class VAE(nn.Module):
             new_x = []
             for i in range(x.size(0)):
                 new_x.append(x[i, :end_pads[i]])
+            # Return list of decoded SMILES, marking any decoding failure as ''
             return [self.tensor2string(i_x) for i_x in new_x]

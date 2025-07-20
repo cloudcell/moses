@@ -31,7 +31,37 @@ def main():
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--vocab_file', type=str, default=None, help='Path to APETokenizer vocab file (tokenizer.json). If not provided, will download from HuggingFace Hub.')
     args = parser.parse_args()
+
+    # --- Load APETokenizer vocab ---
+    from apetokenizer.ape_tokenizer import APETokenizer
+    if args.vocab_file is not None:
+        vocab_path = args.vocab_file
+        print(f"Loading APETokenizer vocab from file: {vocab_path}")
+    else:
+        print("No vocab file supplied, downloading from HuggingFace Hub...")
+        from huggingface_hub import hf_hub_download
+        import os, shutil
+        vocab_path = hf_hub_download(
+            repo_id="mikemayuare/SELFYAPE",
+            filename="tokenizer.json",
+        )
+        # Save a copy to ./downloaded/tokenizer.json
+        local_dir = os.path.join(os.path.dirname(__file__), 'downloaded')
+        os.makedirs(local_dir, exist_ok=True)
+        local_vocab_path = os.path.join(local_dir, 'tokenizer.json')
+        shutil.copy(vocab_path, local_vocab_path)
+        print(f"Downloaded vocab to: {vocab_path}")
+        print(f"Copied vocab to local path: {local_vocab_path}")
+        vocab_path = local_vocab_path
+    from load_hf_vocab import extract_hf_vocab
+    tokenizer = APETokenizer()
+    # Use wrapper to extract vocab if needed, then set directly
+    vocab_dict = extract_hf_vocab(vocab_path)
+    tokenizer.vocabulary = vocab_dict
+    tokenizer.update_reverse_vocabulary()
+    print("Vocabulary size:", len(tokenizer.vocabulary))
 
     # Set thread count if using CPU
     if args.device == 'cpu':
@@ -48,12 +78,12 @@ def main():
     train_smiles = load_smiles_file('data_trn.txt')
     val_smiles = load_smiles_file('data_val.txt')
     test_smiles = load_smiles_file('data_tst.txt')
-    train_loader, vocab = get_data_loaders(train_smiles, batch_size=args.batch_size)
-    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, vocab=vocab)
-    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, vocab=vocab)
+    train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
+    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
+    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
 
     config = get_default_config()
-    model = VAE(vocab, config).to(args.device)
+    model = VAE(tokenizer, config).to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_start)
     from misc import KLAnnealer
     kl_annealer = KLAnnealer(args.epochs, config)
@@ -173,8 +203,8 @@ def main():
                 input_tensor = model.string2tensor(s, device=args.device).unsqueeze(0)
                 with torch.no_grad():
                     z, _ = model.forward_encoder(input_tensor)
-                    out = model.sample(1, max_len=len(s)+10, z=z)  # contains .forward_decoder and returns strings
-                    out = out[0]
+                    out_tokens = model.sample(1, max_len=len(s)+10, z=z)  # returns list of SMILES via new pipeline
+                    out = out_tokens[0]  # already SMILES via tensor2string
                 valid = is_valid_smiles(out)
                 log_f.write(f"IN : {s}\n")
                 log_f.write(f"OUT: {out}\t{'valid' if valid else 'invalid'}\n")
