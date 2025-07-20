@@ -9,7 +9,7 @@ class VAEConfig:
         self.d_cell = 'gru'
         self.d_n_layers = 3
         self.d_dropout = 0
-        self.d_z = 128
+        self.d_z = 128 * 2
         self.d_d_h = 512
         self.freeze_embeddings = False
         # Train params
@@ -18,13 +18,13 @@ class VAEConfig:
         self.kl_start = 0
         self.kl_w_start = 0
         self.kl_w_end = 0.05
-        self.lr_start = 1e-4  #3e-3
-        self.lr_factor = 0.9
+        self.lr_start = 1e-3  #3e-3
+        self.lr_factor = 0.98
         self.lr_patience = 0
         self.lr_n_period = 10
         self.lr_n_restarts = 10
         self.lr_n_mult = 1
-        self.lr_end = 1e-6  #3e-4
+        self.lr_end = 1e-7  #3e-4
         self.n_last = 1000
         self.n_jobs = 1
         self.n_workers = 1

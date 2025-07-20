@@ -40,21 +40,25 @@ def main():
         vocab_path = args.vocab_file
         print(f"Loading APETokenizer vocab from file: {vocab_path}")
     else:
-        print("No vocab file supplied, downloading from HuggingFace Hub...")
-        from huggingface_hub import hf_hub_download
-        import os, shutil
-        vocab_path = hf_hub_download(
-            repo_id="mikemayuare/SELFYAPE",
-            filename="tokenizer.json",
-        )
-        # Save a copy to ./downloaded/tokenizer.json
+        import os
         local_dir = os.path.join(os.path.dirname(__file__), 'downloaded')
         os.makedirs(local_dir, exist_ok=True)
         local_vocab_path = os.path.join(local_dir, 'tokenizer.json')
-        shutil.copy(vocab_path, local_vocab_path)
-        print(f"Downloaded vocab to: {vocab_path}")
-        print(f"Copied vocab to local path: {local_vocab_path}")
-        vocab_path = local_vocab_path
+        if os.path.exists(local_vocab_path):
+            print(f"Found existing vocab at: {local_vocab_path}")
+            vocab_path = local_vocab_path
+        else:
+            print("No vocab file supplied, downloading from HuggingFace Hub...")
+            from huggingface_hub import hf_hub_download
+            import shutil
+            vocab_path = hf_hub_download(
+                repo_id="mikemayuare/SELFYAPE",
+                filename="tokenizer.json",
+            )
+            shutil.copy(vocab_path, local_vocab_path)
+            print(f"Downloaded vocab to: {vocab_path}")
+            print(f"Copied vocab to local path: {local_vocab_path}")
+            vocab_path = local_vocab_path
     from load_hf_vocab import extract_hf_vocab
     tokenizer = APETokenizer()
     # Use wrapper to extract vocab if needed, then set directly

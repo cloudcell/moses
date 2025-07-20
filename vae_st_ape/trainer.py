@@ -11,10 +11,15 @@ class VAETrainer:
         kl_loss_values = CircularBuffer(self.config.n_last)
         recon_loss_values = CircularBuffer(self.config.n_last)
         loss_values = CircularBuffer(self.config.n_last)
+        total_loss = 0.0
+        total_kl = 0.0
+        total_recon = 0.0
+        total_samples = 0
         from tqdm import tqdm
         train_iter = tqdm(train_loader, desc=f"Train (epoch {epoch+1})")
         for input_batch in train_iter:
             input_batch = [data.to(model.device) for data in input_batch]
+            batch_size = input_batch[0].size(0) if hasattr(input_batch[0], 'size') else len(input_batch[0])
             kl_loss, recon_loss = model(input_batch)
             loss = kl_loss + recon_loss
             optimizer.zero_grad()
@@ -24,6 +29,10 @@ class VAETrainer:
             kl_loss_values.add(kl_loss.item())
             recon_loss_values.add(recon_loss.item())
             loss_values.add(loss.item())
+            total_loss += loss.item() * batch_size
+            total_kl += kl_loss.item() * batch_size
+            total_recon += recon_loss.item() * batch_size
+            total_samples += batch_size
             train_iter.set_postfix({
                 # as 6 digits after the decimal point
                 'loss': f"{loss.item():.6f}", 
@@ -31,11 +40,17 @@ class VAETrainer:
                 'recon': f"{recon_loss.item():.6f}", 
                 'lr': f"{optimizer.param_groups[0]['lr']:.6f}", 
             })
+        epoch_avg_loss = total_loss / max(1, total_samples)
+        epoch_avg_kl = total_kl / max(1, total_samples)
+        epoch_avg_recon = total_recon / max(1, total_samples)
         return {
             'epoch': epoch + 1,
             'kl_loss': kl_loss_values.mean(),
             'recon_loss': recon_loss_values.mean(),
             'loss': loss_values.mean(),
+            'epoch_avg_loss': epoch_avg_loss,
+            'epoch_avg_kl': epoch_avg_kl,
+            'epoch_avg_recon': epoch_avg_recon,
         }
 
     def fit(self, model, train_loader, val_loader, logger=None, epochs=10, lr=None, scheduler=None, checkpoint_dir=None, start_epoch=0):
@@ -51,15 +66,22 @@ class VAETrainer:
             # After each epoch, evaluate on validation set to get val_loss
             model.eval()
             val_loss = 0.0
+            val_kl = 0.0
+            val_recon = 0.0
+            val_samples = 0
             val_batches = 0
             from tqdm import tqdm
             with torch.no_grad():
                 val_iter = tqdm(val_loader, desc=f"Val (epoch {epoch+1})")
                 for batch in val_iter:
                     batch = [b.to(model.device) for b in batch]
+                    batch_size = batch[0].size(0) if hasattr(batch[0], 'size') else len(batch[0])
                     kl_loss, recon_loss = model(batch)
                     loss = kl_loss + recon_loss
-                    val_loss += loss.item()
+                    val_loss += loss.item() * batch_size
+                    val_kl += kl_loss.item() * batch_size
+                    val_recon += recon_loss.item() * batch_size
+                    val_samples += batch_size
                     val_batches += 1
                     val_iter.set_postfix({
                         # as 6 digits after the decimal point
@@ -68,10 +90,14 @@ class VAETrainer:
                         'recon': f"{recon_loss.item():.6f}", 
                         'lr': f"{optimizer.param_groups[0]['lr']:.6f}", 
                     })
-            mean_val_loss = val_loss / max(1, val_batches)
+            mean_val_loss = val_loss / max(1, val_samples)
+            mean_val_kl = val_kl / max(1, val_samples)
+            mean_val_recon = val_recon / max(1, val_samples)
             scheduler.step(mean_val_loss)
             if logger is not None:
                 stats['val_loss'] = mean_val_loss
+                stats['val_kl'] = mean_val_kl
+                stats['val_recon'] = mean_val_recon
                 logger.append(stats)
             # Save checkpoint with full metadata
             if checkpoint_dir is not None:
