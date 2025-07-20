@@ -79,15 +79,23 @@ class VAE(nn.Module):
     def tensor2string(self, tensor):
         import selfies
         ids = tensor.tolist()
-        # Convert tokens to SELFIES string
-        selfies_str = ''.join(self.vocabulary.convert_ids_to_tokens(ids))
+        tokens = self.vocabulary.convert_ids_to_tokens(ids)
+        # Remove all special tokens (not just <unk>)
+        special_tokens = set()
+        if hasattr(self.vocabulary, 'special_tokens'):
+            special_tokens = set(self.vocabulary.special_tokens.keys())
+        else:
+            # Fallback: common special tokens
+            special_tokens = {'<unk>', '<pad>', '<s>', '</s>', '<mask>'}
+        tokens = [tok for tok in tokens if tok not in special_tokens]
+        selfies_str = ''.join(tokens)
         try:
-            # Convert SELFIES back to SMILES
             smiles = selfies.decoder(selfies_str)
         except Exception as e:
             print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
-            smiles = ''  # or None, or '[INVALID]'
+            smiles = ''
         return smiles
+
     def forward(self, x):
         z, kl_loss = self.forward_encoder(x)
         recon_loss = self.forward_decoder(x, z)
