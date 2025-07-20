@@ -11,6 +11,7 @@ from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
 # import random
 import numpy as np
+import datetime as dt
 
 # Load SMILES from a text file (one per line)
 def load_smiles_file(path, limit=None):
@@ -54,9 +55,8 @@ def main():
     config = get_default_config()
     model = VAE(vocab, config).to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_start)
-    from misc import KLAnnealer, CosineAnnealingLRWithRestart
+    from misc import KLAnnealer
     kl_annealer = KLAnnealer(args.epochs, config)
-    lr_scheduler = CosineAnnealingLRWithRestart(optimizer, config)
     import os, glob
     checkpoint_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -66,68 +66,34 @@ def main():
     start_epoch = 0
     checkpoint_files = sorted(glob.glob(os.path.join(checkpoint_dir, 'model_epoch_*.pt')),
                               key=lambda x: int(os.path.basename(x).split('_')[-1].split('.')[0]))
+    scheduler = None  # will be created after optimizer
     if checkpoint_files:
         latest_ckpt = checkpoint_files[-1]
         print(f"Loading checkpoint: {latest_ckpt}")
         checkpoint = torch.load(latest_ckpt, map_location=args.device)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch']
-        best_val_loss = checkpoint.get('val_loss', float('inf'))
+        # Restore scheduler after creation below
+        metadata = checkpoint.get('metadata', {})
+        start_epoch = metadata.get('epoch', checkpoint.get('epoch', 0))
+        best_val_loss = metadata.get('val_loss', float('inf'))
         print(f"Resuming from epoch {start_epoch}")
+    else:
+        metadata = {}
 
     logger = Logger()
     end_epoch = start_epoch + args.epochs
-    for epoch in range(start_epoch, end_epoch):
-        kl_weight = kl_annealer(epoch)
-        print(f"Epoch {epoch+1}/{end_epoch} (kl_weight={kl_weight:.4f}, lr={optimizer.param_groups[0]['lr']:.6f})")
-        # --- Training ---
-        model.train()
-        train_iter = tqdm(train_loader, desc=f'Train (epoch {epoch+1})', leave=False)
-        for batch in train_iter:
-            batch = [b.to(args.device) for b in batch]
-            optimizer.zero_grad()
-            kl_loss, recon_loss = model(batch)
-            loss = kl_weight * kl_loss + recon_loss
-            loss.backward()
-            optimizer.step()
-            logger.append({'kl_loss': kl_loss.item(), 'recon_loss': recon_loss.item(), 'loss': loss.item(), 'kl_weight': kl_weight, 'lr': optimizer.param_groups[0]['lr'], 'mode': 'train'})
-            train_iter.set_postfix(loss=loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
-        lr_scheduler.step()
-        print(f"Train Loss: {loss.item():.4f}")
-        # --- Validation ---
-        model.eval()
-        val_losses = []
-        val_iter = tqdm(val_loader, desc=f'Val (epoch {epoch+1})', leave=False)
-        with torch.no_grad():
-            for batch in val_iter:
-                batch = [b.to(args.device) for b in batch]
-                kl_loss, recon_loss = model(batch)
-                val_loss = kl_weight * kl_loss + recon_loss
-                val_losses.append(val_loss.item())
-                logger.append({'kl_loss': kl_loss.item(), 'recon_loss': recon_loss.item(), 'loss': val_loss.item(), 'kl_weight': kl_weight, 'lr': optimizer.param_groups[0]['lr'], 'mode': 'val'})
-                val_iter.set_postfix(loss=val_loss.item(), kl=kl_loss.item(), recon=recon_loss.item())
-        mean_val_loss = sum(val_losses) / len(val_losses) if val_losses else float('nan')
-        print(f"Val Loss: {mean_val_loss:.4f}")
-        # --- Checkpoint ---
-        checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch+1}.pt")
-        torch.save({
-            'epoch': epoch+1,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'val_loss': mean_val_loss,
-            'config': config.__dict__,
-        }, checkpoint_path)
-        if mean_val_loss < best_val_loss:
-            best_val_loss = mean_val_loss
-            torch.save({
-                'epoch': epoch+1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': mean_val_loss,
-                'config': config.__dict__,
-            }, os.path.join(checkpoint_dir, "best_model.pt"))
-    logger.save('train_log.csv')
+    from torch.optim.lr_scheduler import ReduceLROnPlateau
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=config.lr_factor, patience=config.lr_patience, min_lr=config.lr_end)
+    # Restore scheduler state if present
+    if 'scheduler_state_dict' in metadata:
+        scheduler.load_state_dict(metadata['scheduler_state_dict'])
+    trainer = VAETrainer(config)
+    trainer.fit(model, train_loader, val_loader, logger=logger, epochs=args.epochs, lr=config.lr_start, scheduler=scheduler, checkpoint_dir=checkpoint_dir, start_epoch=start_epoch)
+     
+    # save log with a timestamp
+    timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    logger.save(f'train_log_{timestamp}.csv')
 
     # After training, evaluate on test set
     print("\nTest set evaluation:")
@@ -188,12 +154,13 @@ def main():
             sm = SequenceMatcher(None, a, b)
             return max(len(a), len(b)) - int(sm.ratio() * max(len(a), len(b)))
 
-    import datetime
     log_dir = os.path.join(os.path.dirname(__file__), 'test_results')
     os.makedirs(log_dir, exist_ok=True)
     current_epoch = start_epoch if 'start_epoch' in locals() else 0
-    now = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_filename = f"epoch_{current_epoch}_{now}.log"
+    # Make epoch numbering 1-based and zero-padded to 5 digits
+    epoch_str = f"{current_epoch+1:05d}"
+    now = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_filename = f"epoch_{epoch_str}_{now}.log"
     log_path = os.path.join(log_dir, log_filename)
 
     with open(log_path, 'w') as log_f:
