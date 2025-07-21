@@ -1,6 +1,6 @@
 import torch
 from trainer import VAETrainer
-from model import VAE
+from model import VAE, VAEDummy
 from config import get_default_config
 from data_loader import get_data_loaders
 from utils import Logger
@@ -32,6 +32,7 @@ def main():
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vocab_file', type=str, default=None, help='Path to APETokenizer vocab file (tokenizer.json). If not provided, will download from HuggingFace Hub.')
+    parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy'], help='Which model to use: vae (default) or vaedummy (plain LSTM autoencoder)')
     args = parser.parse_args()
 
     # --- Load APETokenizer vocab ---
@@ -149,7 +150,13 @@ def main():
     print("Are filtered batches identical?", train_filtered == val_filtered)
 
     config = get_default_config()
-    model = VAE(tokenizer, config).to(args.device)
+    # --- Build model ---
+    if args.model_type == 'vaedummy':
+        print('Using VAEDummy (plain LSTM autoencoder)')
+        model = VAEDummy(tokenizer, config)
+    else:
+        model = VAE(tokenizer, config)
+    model = model.to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_start)
     from misc import KLAnnealer
     kl_annealer = KLAnnealer(args.epochs, config)
@@ -276,7 +283,7 @@ def main():
                 log_f.write(f"IN : {s}\n")
                 same = False
                 mol_in = Chem.MolFromSmiles(s)
-                mol_out = Chem.MolFromSmiles(out)
+                mol_out = Chem.MolFromSmiles(out)                
                 if mol_in is not None and mol_out is not None:
                     can_in = Chem.MolToSmiles(mol_in, canonical=True)
                     can_out = Chem.MolToSmiles(mol_out, canonical=True)

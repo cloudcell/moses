@@ -2,6 +2,143 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class VAEDummy(nn.Module):
+    def forward_encoder(self, x):
+        # For compatibility: return encoder hidden state and kl_loss=0
+        lengths = [len(i_x) for i_x in x]
+        x_padded = nn.utils.rnn.pad_sequence(x, batch_first=True, padding_value=self.pad)
+        x_emb = self.x_emb(x_padded)
+        packed = nn.utils.rnn.pack_padded_sequence(x_emb, lengths, batch_first=True, enforce_sorted=False)
+        _, (h, c) = self.encoder_rnn(packed)
+        if self.encoder_rnn.bidirectional:
+            num_layers = self.encoder_rnn.num_layers
+            h_fwd = h[0::2]
+            h_bwd = h[1::2]
+            h_dec = h_fwd + h_bwd
+        else:
+            h_dec = h
+        # Use the last layer's hidden state as a dummy "z"
+        z = h_dec[-1]
+        kl_loss = torch.tensor(0.0, device=self.device)
+        return z, kl_loss
+
+    def __init__(self, tokenizer, config):
+        super().__init__()
+        self.config = config
+        self.vocabulary = tokenizer
+        self.bos = tokenizer.bos_token_id
+        self.eos = tokenizer.eos_token_id
+        self.pad = tokenizer.pad_token_id
+        self.unk = tokenizer.special_tokens[tokenizer.unk_token] if hasattr(tokenizer, 'special_tokens') else tokenizer.unk_token_id
+        n_vocab = len(tokenizer)
+        d_emb = getattr(config, 'embedding_dim', 256)
+        self.x_emb = nn.Embedding(n_vocab, d_emb, self.pad)
+        if getattr(config, 'freeze_embeddings', False):
+            self.x_emb.weight.requires_grad = False
+        self.encoder_rnn = nn.LSTM(
+            d_emb,
+            config.q_d_h,
+            num_layers=config.q_n_layers,
+            batch_first=True,
+            dropout=config.q_dropout if config.q_n_layers > 1 else 0,
+            bidirectional=config.q_bidir
+        )
+        self.decoder_rnn = nn.LSTM(
+            d_emb,
+            config.d_d_h,
+            num_layers=config.d_n_layers,
+            batch_first=True,
+            dropout=config.d_dropout if config.d_n_layers > 1 else 0
+        )
+        self.decoder_fc = nn.Linear(config.d_d_h, n_vocab)
+        assert self.decoder_fc.out_features == n_vocab
+        assert self.x_emb.num_embeddings == n_vocab
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    def string2tensor(self, smiles, device='model'):
+        import selfies
+        selfies_str = selfies.encoder(smiles)
+        ids = self.vocabulary.encode(selfies_str, add_special_tokens=True)
+        tensor = torch.tensor(
+            ids, dtype=torch.long,
+            device=self.device if device == 'model' else device
+        )
+        return tensor
+    def tensor2string(self, tensor):
+        import selfies
+        ids = tensor.tolist()
+        tokens = self.vocabulary.convert_ids_to_tokens(ids)
+        special_tokens = set()
+        if hasattr(self.vocabulary, 'special_tokens'):
+            special_tokens = set(self.vocabulary.special_tokens.keys())
+        else:
+            special_tokens = {'<unk>', '<pad>', '<s>', '</s>', '<mask>'}
+        tokens = [tok for tok in tokens if tok not in special_tokens]
+        selfies_str = ''.join(tokens)
+        try:
+            smiles = selfies.decoder(selfies_str)
+        except Exception as e:
+            print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
+            smiles = ''
+        return smiles
+    def forward(self, x):
+        # x: list of token tensors (batch)
+        lengths = [len(i_x) for i_x in x]
+        x_padded = nn.utils.rnn.pad_sequence(x, batch_first=True, padding_value=self.pad)
+        x_emb = self.x_emb(x_padded)
+        packed = nn.utils.rnn.pack_padded_sequence(x_emb, lengths, batch_first=True, enforce_sorted=False)
+        _, (h, c) = self.encoder_rnn(packed)
+        # Combine bidirectional states for decoder init
+        if self.encoder_rnn.bidirectional:
+            num_layers = self.encoder_rnn.num_layers
+            # h, c: [num_layers * 2, batch, hidden_size]
+            h_fwd = h[0::2]
+            h_bwd = h[1::2]
+            c_fwd = c[0::2]
+            c_bwd = c[1::2]
+            h_dec = h_fwd + h_bwd
+            c_dec = c_fwd + c_bwd
+        else:
+            h_dec = h
+            c_dec = c
+        # Decoder: teacher forcing
+        packed_dec = nn.utils.rnn.pack_padded_sequence(x_emb, lengths, batch_first=True, enforce_sorted=False)
+        output, _ = self.decoder_rnn(packed_dec, (h_dec, c_dec))
+        output, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=True)
+        y = self.decoder_fc(output)
+        recon_loss = F.cross_entropy(
+            y[:, :-1].contiguous().view(-1, y.size(-1)),
+            x_padded[:, 1:].contiguous().view(-1),
+            ignore_index=self.pad
+        )
+        kl_loss = torch.tensor(0.0, device=self.device)
+        return kl_loss, recon_loss
+    def sample(self, n_batch, max_len=None, z=None, temp=1.0):
+        if max_len is None:
+            max_len = getattr(self, 'config', None) and getattr(self.config, 'max_len', 100) or 100
+        with torch.no_grad():
+            w = torch.tensor(self.bos, device=self.device).repeat(n_batch)
+            x = torch.tensor([self.pad], device=self.device).repeat(n_batch, max_len)
+            x[:, 0] = self.bos
+            h = None
+            eos_mask = torch.zeros(n_batch, dtype=torch.bool, device=self.device)
+            end_pads = torch.tensor([max_len], device=self.device).repeat(n_batch)
+            for i in range(1, max_len):
+                x_emb = self.x_emb(w).unsqueeze(1)
+                o, h = self.decoder_rnn(x_emb, h)
+                y = self.decoder_fc(o.squeeze(1))
+                y = F.softmax(y / temp, dim=-1)
+                w = torch.multinomial(y, 1)[:, 0]
+                x[~eos_mask, i] = w[~eos_mask]
+                i_eos_mask = (~eos_mask) & (w == self.eos)
+                end_pads[i_eos_mask] = i + 1
+                eos_mask = eos_mask | i_eos_mask
+            new_x = []
+            for i in range(x.size(0)):
+                new_x.append(x[i, :end_pads[i]])
+            return [self.tensor2string(i_x) for i_x in new_x]
+
 class VAE(nn.Module):
     def __init__(self, tokenizer, config):
         self.config = config
