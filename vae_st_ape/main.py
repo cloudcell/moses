@@ -128,45 +128,73 @@ def main():
     # --- Robust decoding: filter tokens not in SELFIES alphabet and <unk> before decoding ---
     import selfies
     selfies_alphabet = set(selfies.get_semantic_robust_alphabet())
-    def filter_tokens(token_list, vocab, selfies_alphabet):
-        # Remove <unk> and tokens not in the SELFIES alphabet
+    import selfies as selfies_lib
+    def filter_tokens(token_list, vocab, selfies_alphabet, debug_first_seq=False):
+        # Diagnostic: print the alphabet once
+        if not hasattr(filter_tokens, 'printed_alphabet'):
+            print('[DEBUG] selfies_alphabet:', selfies_alphabet)
+            filter_tokens.printed_alphabet = True
         filtered = []
-        for idx in token_list:
+        for i, idx in enumerate(token_list):
             tok = vocab.get(idx, None) if isinstance(vocab, dict) else vocab[idx]
             if tok == '<unk>' or tok is None:
                 continue
-            # Remove BOS/EOS tokens if present
             if tok in ('<s>', '</s>'):
                 continue
-            if tok not in selfies_alphabet and not tok.startswith('['):
-                continue
-            filtered.append(tok)
+            # Split macro-token into atomic tokens and append each atomic token individually
+            split_toks = selfies_lib.split_selfies(tok)
+            if debug_first_seq:
+                print(f'[DEBUG] filter_tokens: idx={i}, tok={tok!r}, split_toks={split_toks}')
+            for atomic_tok in split_toks:
+                if atomic_tok in selfies_alphabet:
+                    filtered.append(atomic_tok)
+                else:
+                    if debug_first_seq:
+                        print(f'[WARNING] atomic token {atomic_tok!r} not in alphabet!')
+        if debug_first_seq:
+            print(f'[DEBUG] filter_tokens: final filtered={filtered}')
+        # Diagnostic: warn if filtered is empty
+        if len(filtered) == 0:
+            print(f'[DIAGNOSTIC] WARNING: filtered tokens are empty!')
+            print(f'[DIAGNOSTIC] Original token_list: {token_list}')
+            print(f'[DIAGNOSTIC] Original tokens: {[vocab.get(idx, None) if isinstance(vocab, dict) else vocab[idx] for idx in token_list]}')
         return filtered
-    # Get vocab reverse mapping
-    vocab_rev = {v: k for k, v in tokenizer.vocabulary.items()}
-    idx_to_token = {i: t for t, i in vocab_rev.items()} if hasattr(tokenizer, 'vocabulary') else None
+
+    # Build idx_to_token as a list mapping index to token string
+    vocab_size = len(tokenizer.vocabulary)
+    idx_to_token = [None] * vocab_size
+    for token, idx in tokenizer.vocabulary.items():
+        idx_to_token[idx] = token
+    print('[DIAGNOSTIC] First 10 idx_to_token:', idx_to_token[:10])
     # Filter and decode
     def robust_decode(batch, dataset, idx_to_token):
         decoded_raw = []
         decoded_filtered = []
-        for seq in batch:
+        for i, seq in enumerate(batch):
             tokens = seq.tolist()
-            # Raw decode (may error)
             try:
                 raw = dataset.decode_tokens(tokens)
             except Exception as e:
                 raw = f"[DecoderError: {e}]"
-            # Filter tokens
-            token_strs = [idx_to_token.get(idx, '<unk>') for idx in tokens]
-            filtered = filter_tokens(tokens, idx_to_token, selfies_alphabet)
+            # For the first sequence only, enable detailed debug in filter_tokens
+            debug_first_seq = (i == 0)
+            filtered = filter_tokens(tokens, idx_to_token, selfies_alphabet, debug_first_seq=debug_first_seq)
             selfies_str = ''.join(filtered)
+            if i < 5:
+                print(f"[DEBUG] robust_decode entry {i}: tokens={tokens}")
+                print(f"[DEBUG] robust_decode entry {i}: filtered tokens={filtered}")
+                print(f"[DEBUG] robust_decode entry {i}: selfies_str='{selfies_str}'")
             try:
                 filtered_decoded = selfies.decoder(selfies_str)
             except Exception as e:
                 filtered_decoded = f"[DecoderError: {e}]"
+            if i < 5:
+                print(f"[DEBUG] robust_decode entry {i}: decoded='{filtered_decoded}'")
             decoded_raw.append(raw)
             decoded_filtered.append(filtered_decoded)
         return decoded_raw, decoded_filtered
+
+
     train_raw, train_filtered = robust_decode(train_batch, train_dataset, idx_to_token)
     val_raw, val_filtered = robust_decode(val_batch, val_dataset, idx_to_token)
     print("Train batch SMILES (raw):", train_raw)
