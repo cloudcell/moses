@@ -3,20 +3,20 @@ class VAEConfig:
         # Model params
         self.q_cell = 'gru'
         self.q_bidir = False
-        self.q_d_h = 256 // 4
-        self.q_n_layers = 1
+        self.q_d_h = 256 * 2 
+        self.q_n_layers = 1 + 2
         self.q_dropout = 0.0  #0.5
         self.d_cell = 'gru'
-        self.d_n_layers = 3
+        self.d_n_layers = 3 + 1
         self.d_dropout = 0
-        self.d_z = 128 * 4 * 2
-        self.d_d_h = 512 * 2
+        self.d_z = 128
+        self.d_d_h = 512
         self.freeze_embeddings = False
         # Train params
         self.n_batch = 512
         self.clip_grad = 50
         self.kl_start = 0
-        self.kl_w_start = 0
+        self.kl_w_start = 0.05
         self.kl_w_end = 0.05  # 0.05
         self.lr_start = 1e-3  #3e-3
         self.lr_factor = 0.98

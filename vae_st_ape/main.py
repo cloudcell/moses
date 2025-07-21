@@ -82,9 +82,69 @@ def main():
     train_smiles = load_smiles_file('data_trn.txt')
     val_smiles = load_smiles_file('data_val.txt')
     test_smiles = load_smiles_file('data_tst.txt')
-    train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer)
+    train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
     val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
     test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
+
+    # Diagnostic: print first batch of SMILES from both loaders
+    print("\n[DIAGNOSTIC] Printing first batch of SMILES from train and val loaders:")
+    train_iter = iter(train_loader)
+    val_iter = iter(val_loader)
+    train_batch = next(train_iter)
+    val_batch = next(val_iter)
+    # Decode tokens back to SMILES for comparison
+    from data_loader import StringDataset
+    train_dataset = StringDataset(train_smiles, tokenizer=tokenizer)
+    val_dataset = StringDataset(val_smiles, tokenizer=tokenizer)
+    # --- Robust decoding: filter tokens not in SELFIES alphabet and <unk> before decoding ---
+    import selfies
+    selfies_alphabet = set(selfies.get_semantic_robust_alphabet())
+    def filter_tokens(token_list, vocab, selfies_alphabet):
+        # Remove <unk> and tokens not in the SELFIES alphabet
+        filtered = []
+        for idx in token_list:
+            tok = vocab.get(idx, None) if isinstance(vocab, dict) else vocab[idx]
+            if tok == '<unk>' or tok is None:
+                continue
+            # Remove BOS/EOS tokens if present
+            if tok in ('<s>', '</s>'):
+                continue
+            if tok not in selfies_alphabet and not tok.startswith('['):
+                continue
+            filtered.append(tok)
+        return filtered
+    # Get vocab reverse mapping
+    vocab_rev = {v: k for k, v in tokenizer.vocabulary.items()}
+    idx_to_token = {i: t for t, i in vocab_rev.items()} if hasattr(tokenizer, 'vocabulary') else None
+    # Filter and decode
+    def robust_decode(batch, dataset, idx_to_token):
+        decoded_raw = []
+        decoded_filtered = []
+        for seq in batch:
+            tokens = seq.tolist()
+            # Raw decode (may error)
+            try:
+                raw = dataset.decode_tokens(tokens)
+            except Exception as e:
+                raw = f"[DecoderError: {e}]"
+            # Filter tokens
+            token_strs = [idx_to_token.get(idx, '<unk>') for idx in tokens]
+            filtered = filter_tokens(tokens, idx_to_token, selfies_alphabet)
+            selfies_str = ''.join(filtered)
+            try:
+                filtered_decoded = selfies.decoder(selfies_str)
+            except Exception as e:
+                filtered_decoded = f"[DecoderError: {e}]"
+            decoded_raw.append(raw)
+            decoded_filtered.append(filtered_decoded)
+        return decoded_raw, decoded_filtered
+    train_raw, train_filtered = robust_decode(train_batch, train_dataset, idx_to_token)
+    val_raw, val_filtered = robust_decode(val_batch, val_dataset, idx_to_token)
+    print("Train batch SMILES (raw):", train_raw)
+    print("Train batch SMILES (filtered):", train_filtered)
+    print("Val batch SMILES (raw):", val_raw)
+    print("Val batch SMILES (filtered):", val_filtered)
+    print("Are filtered batches identical?", train_filtered == val_filtered)
 
     config = get_default_config()
     model = VAE(tokenizer, config).to(args.device)
