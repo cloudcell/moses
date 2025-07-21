@@ -50,6 +50,9 @@ class VAEDummy(nn.Module):
             batch_first=True,
             dropout=config.d_dropout if config.d_n_layers > 1 else 0
         )
+        # Add linear layers to project encoder hidden/cell state to decoder hidden size
+        self.enc2dec_h = nn.Linear(config.q_d_h, config.d_d_h)
+        self.enc2dec_c = nn.Linear(config.q_d_h, config.d_d_h)
         self.decoder_fc = nn.Linear(config.d_d_h, n_vocab)
         assert self.decoder_fc.out_features == n_vocab
         assert self.x_emb.num_embeddings == n_vocab
@@ -102,11 +105,24 @@ class VAEDummy(nn.Module):
         else:
             h_dec = h
             c_dec = c
+        # Project encoder hidden/cell state to decoder hidden size
+        # h_dec, c_dec: [num_layers, batch, encoder_hidden_size]
+        h_dec = self.enc2dec_h(h_dec)
+        c_dec = self.enc2dec_c(c_dec)
         # Decoder: teacher forcing
         packed_dec = nn.utils.rnn.pack_padded_sequence(x_emb, lengths, batch_first=True, enforce_sorted=False)
+        print(f"[DEBUG] x_emb.shape: {x_emb.shape}")
+        print(f"[DEBUG] packed_dec.data.shape: {packed_dec.data.shape}")
+        print(f"[DEBUG] h_dec.shape: {h_dec.shape}")
+        print(f"[DEBUG] c_dec.shape: {c_dec.shape}")
         output, _ = self.decoder_rnn(packed_dec, (h_dec, c_dec))
         output, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=True)
+        print(f"[DEBUG] output.shape: {output.shape}")
         y = self.decoder_fc(output)
+        print(f"[DEBUG] y.shape: {y.shape}")
+        print(f"[DEBUG] x_padded.shape: {x_padded.shape}")
+        print(f"[DEBUG] y[:, :-1].shape: {y[:, :-1].shape}")
+        print(f"[DEBUG] x_padded[:, 1:].shape: {x_padded[:, 1:].shape}")
         recon_loss = F.cross_entropy(
             y[:, :-1].contiguous().view(-1, y.size(-1)),
             x_padded[:, 1:].contiguous().view(-1),
@@ -264,6 +280,11 @@ class VAE(nn.Module):
         output, _ = self.decoder_rnn(x_input, h_0)
         output, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=True)
         y = self.decoder_fc(output)
+        print(f"[DEBUG] output.shape: {output.shape}")
+        print(f"[DEBUG] y.shape: {y.shape}")
+        print(f"[DEBUG] x.shape: {x.shape}")
+        print(f"[DEBUG] y[:, :-1].shape: {y[:, :-1].shape}")
+        print(f"[DEBUG] x[:, 1:].shape: {x[:, 1:].shape}")
         recon_loss = F.cross_entropy(
             y[:, :-1].contiguous().view(-1, y.size(-1)),
             x[:, 1:].contiguous().view(-1),
