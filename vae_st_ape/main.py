@@ -261,7 +261,8 @@ def main():
 
     with open(log_path, 'w') as log_f:
         log_f.write(f"Reconstructions for 1000 first test samples (epoch {current_epoch}):\n")
-        random_indices = range(1000)
+        n_samples = min(1000, len(test_smiles))
+        random_indices = range(n_samples)
         with torch.no_grad():
             # use tqdm
             for idx in tqdm(random_indices):

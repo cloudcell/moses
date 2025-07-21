@@ -14,8 +14,8 @@ class VAEConfig:
         self.d_cell = 'gru'
         self.d_dropout = 0.0
         self.d_n_layers = 1
-        self.d_d_h = 512 * 8
-        self.d_z = 128
+        self.d_d_h = 512 // 2
+        self.d_z = 128 * 3
         
         self.freeze_embeddings = False
         # Maximum sequence length (in tokens)
@@ -24,8 +24,8 @@ class VAEConfig:
         self.n_batch = 512
         self.clip_grad = 50
         self.kl_start = 0
-        self.kl_w_start = 0.05
-        self.kl_w_end = 0.9  # 0.05
+        self.kl_w_start = 0.9
+        self.kl_w_end = 0.0  # 0.05
         self.lr_start = 1e-3  #3e-3
         self.lr_end = 1e-7  #3e-4
         self.lr_factor = 0.95
