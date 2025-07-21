@@ -1,16 +1,19 @@
 class VAEConfig:
     def __init__(self):
         # Model params
+        
         self.q_cell = 'gru'
+        self.q_dropout = 0.0 #0.5
         self.q_bidir = False
         self.q_d_h = 256 * 2 
-        self.q_n_layers = 1 + 2
-        self.q_dropout = 0.0  #0.5
+        self.q_n_layers = 1
+
         self.d_cell = 'gru'
-        self.d_n_layers = 3 + 1
-        self.d_dropout = 0
-        self.d_z = 128
+        self.d_dropout = 0.0
+        self.d_n_layers = 1
         self.d_d_h = 512
+        self.d_z = 128
+        
         self.freeze_embeddings = False
         # Train params
         self.n_batch = 512
