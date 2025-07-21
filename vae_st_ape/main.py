@@ -78,13 +78,15 @@ def main():
     # random.seed(args.seed)
     np.random.seed(args.seed)
 
+    # Load config
+    config = get_default_config()
     # Load real dataset splits
     train_smiles = load_smiles_file('data_trn.txt')
     val_smiles = load_smiles_file('data_val.txt')
     test_smiles = load_smiles_file('data_tst.txt')
-    train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
-    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
-    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False)
+    train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False, config=config)
+    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False, config=config)
+    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False, config=config)
 
     # Diagnostic: print first batch of SMILES from both loaders
     print("\n[DIAGNOSTIC] Printing first batch of SMILES from train and val loaders:")
@@ -271,11 +273,7 @@ def main():
                     out = out_tokens[0]  # already SMILES via tensor2string
                 valid = is_valid_smiles(out)
                 log_f.write(f"IN : {s}\n")
-                log_f.write(f"OUT: {out}\t{'valid' if valid else 'invalid'}\n")
-                if valid:
-                    valid_smiles_cnt += 1
-
-                # check if the reconstruction is the same as the input using canonical SMILES (chemical equivalence)
+                same = False
                 mol_in = Chem.MolFromSmiles(s)
                 mol_out = Chem.MolFromSmiles(out)
                 if mol_in is not None and mol_out is not None:
@@ -283,6 +281,12 @@ def main():
                     can_out = Chem.MolToSmiles(mol_out, canonical=True)
                     if can_in == can_out:
                         valid_reconstructions_cnt += 1
+                        same = True
+                status = 'valid & same' if valid and same else ('valid' if valid else 'invalid')
+                log_f.write(f"OUT: {out}\t{status}\n")
+
+                if valid:
+                    valid_smiles_cnt += 1
 
                 # calculate the edit distance
                 edit_dist = edit_distance(s, out)

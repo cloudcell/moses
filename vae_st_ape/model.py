@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 class VAE(nn.Module):
     def __init__(self, tokenizer, config):
+        self.config = config
         super().__init__()
         self.vocabulary = tokenizer
         # Use APETokenizer's special token ids
@@ -134,7 +135,9 @@ class VAE(nn.Module):
         return recon_loss
     def sample_z_prior(self, n_batch):
         return torch.randn(n_batch, self.q_mu.out_features, device=self.x_emb.weight.device)
-    def sample(self, n_batch, max_len=100, z=None, temp=1.0):
+    def sample(self, n_batch, max_len=None, z=None, temp=1.0):
+        if max_len is None:
+            max_len = getattr(self, 'config', None) and getattr(self.config, 'max_len', 100) or 100
         with torch.no_grad():
             if z is None:
                 z = self.sample_z_prior(n_batch)
