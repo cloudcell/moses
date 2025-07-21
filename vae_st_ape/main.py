@@ -33,7 +33,33 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vocab_file', type=str, default=None, help='Path to APETokenizer vocab file (tokenizer.json). If not provided, will download from HuggingFace Hub.')
     parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy'], help='Which model to use: vae (default) or vaedummy (plain LSTM autoencoder)')
+    parser.add_argument('--gen_vocab', action='store_true', help='Train tokenizer from data and save vocab (then exit)')
     args = parser.parse_args()
+
+    if args.gen_vocab:
+        # Train tokenizer from all data and save vocab
+        from apetokenizer.ape_tokenizer import APETokenizer
+        import selfies
+        train_smiles = load_smiles_file('data_trn.txt')
+        val_smiles = load_smiles_file('data_val.txt')
+        test_smiles = load_smiles_file('data_tst.txt')
+        all_selfies = []
+        skipped = 0
+        for s in train_smiles + val_smiles + test_smiles:
+            try:
+                sf = selfies.encoder(s)
+                all_selfies.append(sf)
+            except selfies.exceptions.EncoderError as e:
+                print(f"[WARN] Skipping SMILES not convertible to SELFIES: {s}\nReason: {e}")
+                skipped += 1
+        print(f"Total skipped SMILES: {skipped}")
+        tokenizer = APETokenizer()
+        print(f"Training tokenizer on {len(all_selfies)} molecules (SELFIES)...")
+        tokenizer.train(all_selfies, type="selfies")
+        out_path = args.vocab_file or "trained_vocab.json"
+        tokenizer.save_vocabulary(out_path)
+        print(f"Trained vocab saved to {out_path}")
+        exit(0)
 
     # --- Load APETokenizer vocab ---
     from apetokenizer.ape_tokenizer import APETokenizer
@@ -275,6 +301,11 @@ def main():
             for idx in tqdm(random_indices):
                 s = test_smiles[idx]
                 input_tensor = model.string2tensor(s, device=args.device).unsqueeze(0)
+                # Assert every token is a known token
+                input_ids = input_tensor.squeeze(0).tolist()
+                vocab_ids = set(range(len(tokenizer)))
+                for token_id in input_ids:
+                    assert token_id in vocab_ids, f"Unknown token_id {token_id} in input: {input_ids} (vocab size: {len(tokenizer)})"
                 with torch.no_grad():
                     z, _ = model.forward_encoder(input_tensor)
                     out_tokens = model.sample(1, max_len=len(s)+10, z=z)  # returns list of SMILES via new pipeline

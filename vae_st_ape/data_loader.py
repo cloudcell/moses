@@ -12,7 +12,17 @@ class StringDataset(Dataset):
     """
     def __init__(self, smiles_list, tokenizer=None, config=None):
         self.smiles = smiles_list
-        self.selfies = [selfies.encoder(s) for s in self.smiles]
+        self.selfies = []
+        self.skipped = 0
+        for s in self.smiles:
+            try:
+                sf = selfies.encoder(s)
+                self.selfies.append(sf)
+            except selfies.exceptions.EncoderError as e:
+                print(f"[WARN] Skipping SMILES not convertible to SELFIES: {s}\nReason: {e}")
+                self.skipped += 1
+        if self.skipped > 0:
+            print(f"[INFO] Skipped {self.skipped} SMILES in dataset due to SELFIES encoding errors.")
         # Require tokenizer to be provided and loaded externally
         if tokenizer is None:
             raise ValueError("Tokenizer must be provided and loaded externally (e.g., from a vocab file). Do not train inside data loader.")
@@ -25,7 +35,7 @@ class StringDataset(Dataset):
         else:
             self.tokens = tokens
     def __len__(self):
-        return len(self.smiles)
+        return len(self.selfies)
     def __getitem__(self, idx):
         return self.tokens[idx]
     def decode_tokens(self, tokens):

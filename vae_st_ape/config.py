@@ -8,14 +8,14 @@ class VAEConfig:
         self.q_cell = 'gru'
         self.q_dropout = 0.0
         self.q_bidir = True
-        self.q_d_h = 512 
-        self.q_n_layers = 2 # 2 worked
+        self.q_d_h = 256 
+        self.q_n_layers = 3 # 2 worked
 
         self.d_cell = 'gru'
         self.d_dropout = 0.0
-        self.d_n_layers = 2
+        self.d_n_layers = 3
         self.d_d_h = 512
-        self.d_z = 64
+        self.d_z = 128 * 2
 
 
         self.freeze_embeddings = False
@@ -25,8 +25,8 @@ class VAEConfig:
         self.n_batch = 512
         self.clip_grad = 50
         self.kl_start = 0
-        self.kl_w_start = 0.0
-        self.kl_w_end = 0.0  # 0.05
+        self.kl_w_start = 0.50
+        self.kl_w_end = 0.05  # 0.05
         self.lr_start = 1e-3  #3e-3
         self.lr_end = 1e-7  #3e-4
         self.lr_factor = 0.95
