@@ -6,6 +6,135 @@ try:
 except ImportError:
     DEBUG = False
 
+
+class VAENovo(nn.Module):
+    def generate(self, x, device=None, max_len=None):
+        """
+        Generate a reconstruction for input x using greedy decoding, similar to VAEDummy2.sample.
+        x: [1, seq_len] input tensor (batch size 1 expected)
+        Returns: [1, max_len] tensor of predicted token ids
+        """
+        if max_len is None:
+            max_len = self.max_len
+        if device is None:
+            device = self.device
+        self.eval()
+        with torch.no_grad():
+            # Encode input to get latent vector z
+            z = self.encode(x.to(device))  # [1, hidden_dim]
+            # Prepare initial hidden/cell state for decoder
+            h = z.unsqueeze(0).repeat(self.num_layers, 1, 1)
+            c = torch.zeros_like(h)
+            # Start with BOS token (assume tokenizer.bos_token_id == 2 or set externally)
+            # Try to infer BOS from input if possible
+            bos_token = x[0,0].item() if x.shape[1] > 0 else 2
+            inputs = torch.tensor([[bos_token]], dtype=torch.long, device=device)
+            outputs = []
+            for _ in range(max_len):
+                emb = self.embedding(inputs[:, -1:])
+                out, (h, c) = self.decoder(emb, (h, c))
+                logits = self.fc_out(out[:, -1, :])
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                outputs.append(next_token)
+                inputs = torch.cat([inputs, next_token], dim=1)
+                # Optionally, add EOS break if known
+            outputs = torch.cat(outputs, dim=1)
+            return outputs
+
+    """
+    Minimal LSTM-based VAE: LSTM encoder, latent z (mu/logvar), reparameterization, LSTM decoder, KL/recon loss.
+    """
+    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, latent_dim=32, num_layers=1, max_len=24):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.emb_dim = emb_dim
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        self.num_layers = num_layers
+        self.max_len = max_len
+        self.embedding = nn.Embedding(vocab_size, emb_dim)
+        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+
+        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc_out = nn.Linear(hidden_dim, vocab_size)
+        # Weight init
+        self.embedding.weight.data.uniform_(-0.1, 0.1)
+        self.fc_out.weight.data.uniform_(-0.1, 0.1)
+        self.fc_out.bias.data.zero_()
+        for name, param in self.encoder.named_parameters():
+            if 'weight' in name:
+                nn.init.uniform_(param, -0.1, 0.1)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+        for name, param in self.decoder.named_parameters():
+            if 'weight' in name:
+                nn.init.uniform_(param, -0.1, 0.1)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    def string2tensor(self, smiles, tokenizer, device=None):
+        import selfies
+        selfies_str = selfies.encoder(smiles)
+        ids = tokenizer.encode(selfies_str, add_special_tokens=True)
+        device = device or self.device
+        return torch.tensor(ids, dtype=torch.long, device=device)
+    def tensor2string(self, token_ids, tokenizer):
+        import selfies
+        ids = token_ids.tolist() if hasattr(token_ids, 'tolist') else list(token_ids)
+        tokens = tokenizer.convert_ids_to_tokens(ids)
+        if hasattr(tokenizer, 'special_tokens') and tokenizer.special_tokens:
+            special_tokens = set(tokenizer.special_tokens.keys())
+        else:
+            special_tokens = {'<unk>', '<pad>', '<s>', '</s>', '<mask>'}
+        filtered_tokens = [tok for tok in tokens if tok not in special_tokens]
+        selfies_str = ''.join(filtered_tokens)
+        if not filtered_tokens:
+            selfies_str = ''.join(tokens)
+        try:
+            smiles = selfies.decoder(selfies_str)
+        except Exception:
+            smiles = ''
+        return smiles
+    def encode(self, x):
+        # x: [batch, seq_len]
+        emb = self.embedding(x)
+        _, (h, _) = self.encoder(emb)
+        z = h[-1]  # [batch, hidden_dim]
+        return z
+
+    def reparameterize(self, z):
+        # In simplified VAE, just pass through (no sampling)
+        return z
+
+    def decode(self, z, x):
+        # z: [batch, hidden_dim], x: [batch, seq_len]
+        batch_size = x.size(0)
+        emb = self.embedding(x)
+        # Use z as initial hidden state for decoder
+        h0 = z.unsqueeze(0).repeat(self.num_layers, 1, 1)
+        c0 = torch.zeros_like(h0)
+        out, _ = self.decoder(emb, (h0, c0))
+        logits = self.fc_out(out)
+        return logits
+    def forward(self, x, kl_weight=1.0):
+        z = self.encode(x)
+        z = self.reparameterize(z)
+        logits = self.decode(z, x)
+        # Shift targets for teacher forcing
+        recon_loss = F.cross_entropy(
+            logits[:, :-1, :].contiguous().view(-1, self.vocab_size),
+            x[:, 1:].contiguous().view(-1),
+            ignore_index=1  #self.tokenizer.pad_token_id
+        )
+        kl_loss = torch.tensor(0.0, device=x.device)
+        total_loss = recon_loss
+        if DEBUG:
+            print(f"[DEBUG] recon_loss={recon_loss.item():.4f}, kl_loss={kl_loss.item():.4f}, kl_weight={kl_weight:.4f}, total_loss={total_loss.item():.4f}")
+        return recon_loss, kl_loss, total_loss
+
+
 class VAEDummy2(nn.Module):
     """
     LSTM encoder-decoder for sequence experiments. Supports SMILES → SELFIES → tokens (APETokenizer) and token ids → SMILES.

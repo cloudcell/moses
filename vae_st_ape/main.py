@@ -36,12 +36,13 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vocab_file', type=str, default=None, help='Path to APETokenizer vocab file (tokenizer.json). If not provided, will download from HuggingFace Hub.')
     parser.add_argument('--debug', action='store_true', help='Enable debug prints')
-    parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy', 'vaedummy2'], help='Which model to use: vae (default), vaedummy (plain LSTM autoencoder), or vaedummy2 (integer LSTM)')
+    parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy', 'vaedummy2', 'vaenovo'], help='Which model to use: vae (default), vaedummy (plain LSTM autoencoder), vaedummy2 (integer LSTM), or vaenovo (minimal LSTM VAE)')
     parser.add_argument('--gen_vocab', action='store_true', help='Train tokenizer from data and save vocab (then exit)')
     parser.add_argument('--single_batch', action='store_true', help='Train and eval on a single batch for overfitting/debugging')
     parser.add_argument('--min_loss', type=float, default=0.1, help='Minimum loss threshold for early stopping')
     args = parser.parse_args()
 
+    
     if args.model_type == 'vaedummy2':
         print("[INFO] Using VAEDummy2: LSTM model for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
         import torch
@@ -59,16 +60,6 @@ def main():
         tokenizer.load_vocabulary(args.vocab_file)
         print(f"[INFO] Loaded vocab size: {len(tokenizer)}")
         # Load SMILES from data files
-        def load_smiles_file(path, limit=None):
-            smiles = []
-            with open(path, 'r') as f:
-                for i, line in enumerate(f):
-                    if limit is not None and i >= limit:
-                        break
-                    s = line.strip()
-                    if s:
-                        smiles.append(s)
-            return smiles
         train_smiles = load_smiles_file('data_trn.txt')
         val_smiles = load_smiles_file('data_val.txt')
         test_smiles = load_smiles_file('data_tst.txt')
@@ -218,8 +209,8 @@ def main():
         tokenizer.train(all_selfies, type="selfies")
         out_path = args.vocab_file or "trained_vocab.json"
         tokenizer.save_vocabulary(out_path)
-        print(f"Trained vocab saved to {out_path}")
-        exit(0)
+        print(f"[INFO] Tokenizer saved to {out_path}")
+        return
 
     # --- Load APETokenizer vocab ---
     from apetokenizer.ape_tokenizer import APETokenizer
@@ -258,6 +249,8 @@ def main():
     if args.device == 'cpu':
         torch.set_num_threads(126)
     
+    import torch
+    import numpy as np
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
@@ -406,11 +399,162 @@ def main():
 
     config = get_default_config()
     # --- Build model ---
-    if args.model_type == 'vaedummy':
+    if args.model_type == 'vaenovo':
+        print("[INFO] Using VAENovo: minimal LSTM-based VAE for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
+        import torch
+        import torch.nn.functional as F
+        from model import VAENovo
+        from apetokenizer.ape_tokenizer import APETokenizer
+        import selfies
+        import sys
+        # Require vocab file
+        if not args.vocab_file:
+            print("[ERROR] --vocab_file must be provided for vaenovo with real APETokenizer vocab.")
+            sys.exit(1)
+        print(f"[INFO] Loading APETokenizer vocab from {args.vocab_file}")
+        tokenizer = APETokenizer()
+        tokenizer.load_vocabulary(args.vocab_file)
+        print(f"[INFO] Loaded vocab size: {len(tokenizer)}")
+        # Load SMILES from data files
+        train_smiles = load_smiles_file('data_trn.txt')
+        val_smiles = load_smiles_file('data_val.txt')
+        test_smiles = load_smiles_file('data_tst.txt')
+        print(f"[INFO] Loaded {len(train_smiles)} train, {len(val_smiles)} val, {len(test_smiles)} test molecules.")
+        # For fast debug, use only first 1000 train/val/test
+        N = 1000
+        train_smiles = train_smiles[:N]
+        val_smiles = val_smiles[:N]
+        test_smiles = test_smiles[:N]
+        vocab_size = len(tokenizer)
+        device = torch.device(args.device)
+        # model = VAENovo(vocab_size=vocab_size, emb_dim=1024, hidden_dim=256, latent_dim=128, num_layers=2, max_len=24).to(device)
+        model = VAENovo(vocab_size=vocab_size, emb_dim=256*2, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)
+        # Prepare tokenized training set
+        token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
+        max_len = max(t.size(0) for t in token_tensors)
+        padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
+        for i, t in enumerate(token_tensors):
+            padded[i, :t.size(0)] = t
+        loader = torch.utils.data.DataLoader(padded, batch_size=16, shuffle=True)
+        from tqdm import tqdm
+        import datetime as dt
+        import os
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        from torch.optim.lr_scheduler import ReduceLROnPlateau
+        scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.99, patience=6, min_lr=1e-7)
+        tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
+        from misc import KLAnnealer
+        kl_annealer = KLAnnealer(args.epochs, config)
+        for epoch in range(args.epochs):
+            epoch_loss = 0.0
+            epoch_recon = 0.0
+            epoch_kl = 0.0
+            kl_weight = kl_annealer(epoch)
+            pbar = tqdm(loader, desc=f"Epoch {epoch}", **tqdm_bar_args)
+            for batch_idx, batch in enumerate(pbar):
+                recon_loss, kl_loss, total_loss = model(batch, kl_weight=kl_weight)
+                opt.zero_grad()
+                total_loss.backward()
+                opt.step()
+                epoch_loss += total_loss.item() * batch.size(0)
+                epoch_recon += recon_loss.item() * batch.size(0)
+                epoch_kl += kl_loss.item() * batch.size(0)
+                avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))
+                avg_recon = epoch_recon / ((batch_idx+1) * batch.size(0))
+                avg_kl = epoch_kl / ((batch_idx+1) * batch.size(0))
+                pbar.set_postfix(loss=f"{avg_loss:.4f}", recon=f"{avg_recon:.4f}", kl=f"{avg_kl:.4f}", klw=f"{kl_weight:.4f}")
+                if args.debug or DEBUG:
+                    print(f"[DEBUG] Epoch {epoch} Batch {batch_idx}: recon_loss={recon_loss.item():.4f}, kl_loss={kl_loss.item():.4f}, kl_weight={kl_weight:.4f}, total_loss={total_loss.item():.4f}")
+                # Print reconstructions for first batch of each epoch
+                if batch_idx == 0:
+                    try:
+                        decoded_in = [model.tensor2string(seq, tokenizer) for seq in batch[:5]]
+                        z, _ = model.encode(batch[:5])
+                        recon_logits = model.decode(z, batch[:5])
+                        recon_tokens = torch.argmax(recon_logits, dim=-1)
+                        decoded_out = [model.tensor2string(seq, tokenizer) for seq in recon_tokens]
+                        print("[RECON] Input vs. Reconstruction (first 5):")
+                        for i, (inp, outp) in enumerate(zip(decoded_in, decoded_out)):
+                            print(f"  [{i}] {inp} => {outp}")
+                    except Exception as e:
+                        print(f"[DEBUG] Reconstruction print failed: {e}")
+            epoch_loss /= len(loader.dataset)
+            epoch_recon /= len(loader.dataset)
+            epoch_kl /= len(loader.dataset)
+            print(f"[EPOCH SUMMARY] Epoch {epoch}: avg_loss={epoch_loss:.4f}, avg_recon={epoch_recon:.4f}, avg_kl={epoch_kl:.4f}, kl_weight={kl_weight:.4f}")
+            scheduler.step(epoch_loss)
+            current_lr = opt.param_groups[0]['lr']
+            print(f"[LR] Epoch {epoch+1}: lr={current_lr:.6g}")
+            if epoch_loss < args.min_loss:
+                print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion: {epoch_loss:.6f} < {args.min_loss}")
+                break
+        # Evaluate on test set, save results
+        model.eval()
+        timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        results_dir = "test_results"
+        os.makedirs(results_dir, exist_ok=True)
+        out_path = os.path.join(results_dir, f"test_results_vaenovo_{timestamp}.txt")
+        from rdkit import Chem
+        import collections
+        with torch.no_grad(), open(out_path, 'w') as f:
+            stats = collections.Counter()
+            edit_distances = []
+            can_edit_distances = []
+            f.write("# VAENovo Test Results\n")
+            for i, smi in enumerate(test_smiles):
+                tensor = model.string2tensor(smi, tokenizer, device=device)
+                tensor = tensor.unsqueeze(0)
+                recon_tokens = model.generate(tensor, device=device)
+                recon_smiles = model.tensor2string(recon_tokens[0], tokenizer)
+                input_tokens = tensor.squeeze(0).tolist()
+                recon_tokens_list = recon_tokens[0].tolist() if hasattr(recon_tokens[0], 'tolist') else list(recon_tokens[0])
+                # Canonicalize
+                can_in = Chem.MolToSmiles(Chem.MolFromSmiles(smi)) if Chem.MolFromSmiles(smi) else ''
+                can_out = Chem.MolToSmiles(Chem.MolFromSmiles(recon_smiles)) if Chem.MolFromSmiles(recon_smiles) else ''
+                edit_dist = sum(a != b for a, b in zip(smi, recon_smiles)) + abs(len(smi) - len(recon_smiles))
+                can_edit_dist = sum(a != b for a, b in zip(can_in, can_out)) + abs(len(can_in) - len(can_out))
+                valid = (can_out != '')
+                exact = (recon_smiles == smi)
+                can_exact = (can_in == can_out) and (can_in != '')
+                stats['total'] += 1
+                if valid:
+                    stats['valid'] += 1
+                if exact:
+                    stats['exact'] += 1
+                if can_exact:
+                    stats['can_exact'] += 1
+                edit_distances.append(edit_dist)
+                can_edit_distances.append(can_edit_dist)
+                # Write as row-oriented block
+                f.write(f"---\n")
+                f.write(f"InputSMILES: {smi}\n")
+                f.write(f"ReconSMILES: {recon_smiles}\n")
+                f.write(f"InputTokens: {input_tokens}\n")
+                f.write(f"ReconTokens: {recon_tokens_list}\n")
+                f.write(f"EditDistance: {edit_dist}\n")
+                f.write(f"CanInputSMILES: {can_in}\n")
+                f.write(f"CanReconSMILES: {can_out}\n")
+                f.write(f"CanEditDistance: {can_edit_dist}\n")
+                f.write(f"Valid: {valid}\n")
+                f.write(f"Exact: {exact}\n")
+                f.write(f"CanExact: {can_exact}\n")
+            # Compile and write statistics
+            mean_ed = sum(edit_distances)/len(edit_distances) if edit_distances else 0.0
+            mean_can_ed = sum(can_edit_distances)/len(can_edit_distances) if can_edit_distances else 0.0
+            f.write("===\n")
+            f.write(f"Total: {stats['total']}\n")
+            f.write(f"Valid: {stats['valid']}\n")
+            f.write(f"Exact: {stats['exact']}\n")
+            f.write(f"CanExact: {stats['can_exact']}\n")
+            f.write(f"MeanEditDistance: {mean_ed:.3f}\n")
+            f.write(f"MeanCanEditDistance: {mean_can_ed:.3f}\n")
+        print(f"Test results logged to {out_path}")
+        print(f"Stats: {dict(stats)}")
+        print(f"Avg edit distance: {sum(edit_distances)/len(edit_distances) if edit_distances else 0:.2f}")
+        print(f"Avg canonical edit distance: {sum(can_edit_distances)/len(can_edit_distances) if can_edit_distances else 0:.2f}")
+    else:
         print('Using VAEDummy (plain LSTM autoencoder)')
         model = VAEDummy(tokenizer, config)
-    else:
-        model = VAE(tokenizer, config)
     model = model.to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_start)
     from misc import KLAnnealer
