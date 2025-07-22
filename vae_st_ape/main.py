@@ -93,7 +93,7 @@ def main():
         import os
         opt = torch.optim.Adam(model.parameters(), lr=1e-2)
         tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
-        for epoch in range(100):
+        for epoch in range(args.epochs):
             epoch_loss = 0.0
             pbar = tqdm(loader, desc=f"Epoch {epoch}", **tqdm_bar_args)
             for batch_idx, batch in enumerate(pbar):
@@ -106,6 +106,9 @@ def main():
                 avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))
                 pbar.set_postfix(loss=f"{avg_loss:.4f}")
             epoch_loss /= len(loader.dataset)
+            if epoch_loss < args.min_loss:
+                print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion: {epoch_loss:.6f} < {args.min_loss}")
+                break
         # Evaluate on test set, save results
         model.eval()
         timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -113,8 +116,12 @@ def main():
         os.makedirs(results_dir, exist_ok=True)
         out_path = os.path.join(results_dir, f"test_results_vaedummy2_{timestamp}.txt")
         from rdkit import Chem
+        import collections
         with torch.no_grad(), open(out_path, 'w') as f:
-            f.write(f"InputSMILES\tReconSMILES\tInputTokens\tReconTokens\tEditDistance\tCanInputSMILES\tCanReconSMILES\tCanEditDistance\n")
+            stats = collections.Counter()
+            edit_distances = []
+            can_edit_distances = []
+            f.write("# VAEDummy2 Test Results\n")
             for i, s in enumerate(tqdm(test_smiles, desc="Testing", **tqdm_bar_args)):
                 t = model.string2tensor(s, tokenizer, device=device).unsqueeze(0)
                 out_logits = model(t)
@@ -122,7 +129,6 @@ def main():
                 recon_smiles = model.tensor2string(out_ids, tokenizer)
                 input_tokens = t.squeeze(0).tolist()
                 recon_tokens = out_ids.tolist()
-                # Compute edit distance (original)
                 def edit_distance(a, b):
                     import numpy as np
                     dp = np.zeros((len(a)+1, len(b)+1), dtype=int)
@@ -148,7 +154,39 @@ def main():
                 can_s = canonicalize(s)
                 can_recon = canonicalize(recon_smiles)
                 can_ed = edit_distance(can_s, can_recon)
-                f.write(f"{s}\t{recon_smiles}\t{input_tokens}\t{recon_tokens}\t{ed}\t{can_s}\t{can_recon}\t{can_ed}\n")
+                # Validity check
+                valid = (can_recon != '')
+                exact = (recon_smiles == s)
+                can_exact = (can_recon == can_s) and (can_recon != '')
+                stats['total'] += 1
+                if valid: stats['valid'] += 1
+                if exact: stats['exact'] += 1
+                if can_exact: stats['can_exact'] += 1
+                edit_distances.append(ed)
+                can_edit_distances.append(can_ed)
+                # Write as row-oriented block
+                f.write(f"---\n")
+                f.write(f"InputSMILES: {s}\n")
+                f.write(f"ReconSMILES: {recon_smiles}\n")
+                f.write(f"InputTokens: {input_tokens}\n")
+                f.write(f"ReconTokens: {recon_tokens}\n")
+                f.write(f"EditDistance: {ed}\n")
+                f.write(f"CanInputSMILES: {can_s}\n")
+                f.write(f"CanReconSMILES: {can_recon}\n")
+                f.write(f"CanEditDistance: {can_ed}\n")
+                f.write(f"Valid: {valid}\n")
+                f.write(f"Exact: {exact}\n")
+                f.write(f"CanExact: {can_exact}\n")
+            # Compile and write statistics
+            mean_ed = sum(edit_distances)/len(edit_distances) if edit_distances else 0.0
+            mean_can_ed = sum(can_edit_distances)/len(can_edit_distances) if can_edit_distances else 0.0
+            f.write("===\n")
+            f.write(f"Total: {stats['total']}\n")
+            f.write(f"Valid: {stats['valid']}\n")
+            f.write(f"Exact: {stats['exact']}\n")
+            f.write(f"CanExact: {stats['can_exact']}\n")
+            f.write(f"MeanEditDistance: {mean_ed:.3f}\n")
+            f.write(f"MeanCanEditDistance: {mean_can_ed:.3f}\n")
         print(f"[INFO] Test results saved to {out_path}")
         return
 
