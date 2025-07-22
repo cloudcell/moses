@@ -25,13 +25,17 @@ def load_smiles_file(path, limit=None):
                 smiles.append(s)
     return smiles
 
+DEBUG = False
+
 def main():
+    global DEBUG
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vocab_file', type=str, default=None, help='Path to APETokenizer vocab file (tokenizer.json). If not provided, will download from HuggingFace Hub.')
+    parser.add_argument('--debug', action='store_true', help='Enable debug prints')
     parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy'], help='Which model to use: vae (default) or vaedummy (plain LSTM autoencoder)')
     parser.add_argument('--gen_vocab', action='store_true', help='Train tokenizer from data and save vocab (then exit)')
     args = parser.parse_args()
