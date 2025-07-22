@@ -49,6 +49,15 @@ def main():
         from model import VAEDummy2
         from apetokenizer.ape_tokenizer import APETokenizer
         import selfies
+        import sys
+        # Require vocab file
+        if not args.vocab_file:
+            print("[ERROR] --vocab_file must be provided for vaedummy2 with real APETokenizer vocab.")
+            sys.exit(1)
+        print(f"[INFO] Loading APETokenizer vocab from {args.vocab_file}")
+        tokenizer = APETokenizer()
+        tokenizer.load_vocabulary(args.vocab_file)
+        print(f"[INFO] Loaded vocab size: {len(tokenizer)}")
         # Example SMILES strings (could be loaded from file)
         smiles_list = [
             'CCO',
@@ -57,8 +66,6 @@ def main():
             'C1=CC=CN=C1',
             'CCN(CC)CC',
         ]
-        tokenizer = APETokenizer()
-        tokenizer.train([selfies.encoder(s) for s in smiles_list], type="selfies")
         vocab_size = len(tokenizer)
         device = torch.device(args.device)
         model = VAEDummy2(vocab_size=vocab_size, emb_dim=32, hidden_dim=64, num_layers=1, max_len=24).to(device)
