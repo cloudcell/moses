@@ -17,6 +17,7 @@ class VAETrainer:
         total_samples = 0
         from tqdm import tqdm
         train_iter = tqdm(train_loader, desc=f"Train (epoch {epoch+1})")
+        early_stop = False
         for input_batch in train_iter:
             input_batch = [data.to(model.device) for data in input_batch]
             batch_size = input_batch[0].size(0) if hasattr(input_batch[0], 'size') else len(input_batch[0])
@@ -39,10 +40,16 @@ class VAETrainer:
                 'recon': f"{total_recon / max(1, total_samples):.6f}",
                 'lr': f"{optimizer.param_groups[0]['lr']:.6f}",
             })
+            # Early stopping (batch-level, compare running avg total loss)
+            running_avg_loss = total_loss / max(1, total_samples)
+            if hasattr(self, 'min_loss') and running_avg_loss < self.min_loss:
+                print(f"[EARLY STOP] Running avg loss {running_avg_loss:.4f} < min_loss ({self.min_loss}), stopping epoch early.")
+                early_stop = True
+                break
         epoch_avg_loss = total_loss / max(1, total_samples)
         epoch_avg_kl = total_kl / max(1, total_samples)
         epoch_avg_recon = total_recon / max(1, total_samples)
-        return {
+        stats = {
             'epoch': epoch + 1,
             'kl_loss': kl_loss_values.mean(),
             'recon_loss': recon_loss_values.mean(),
@@ -51,17 +58,38 @@ class VAETrainer:
             'epoch_avg_kl': epoch_avg_kl,
             'epoch_avg_recon': epoch_avg_recon,
         }
+        return stats, early_stop
 
-    def fit(self, model, train_loader, val_loader, logger=None, epochs=10, lr=None, scheduler=None, checkpoint_dir=None, start_epoch=0):
+    def fit(self, model, train_loader, val_loader, logger=None, epochs=10, lr=None, scheduler=None, checkpoint_dir=None, start_epoch=0, min_loss=0.1):
         import os
+        import sys
+        single_batch_mode = '--single_batch' in sys.argv
+        self.min_loss = min_loss  # Store for use in _train_epoch
         if scheduler is None:
             optimizer = torch.optim.Adam(model.parameters(), lr=lr or self.config.lr_start)
             from torch.optim.lr_scheduler import ReduceLROnPlateau
             scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=self.config.lr_factor, patience=self.config.lr_patience, min_lr=self.config.lr_end)
         else:
             optimizer = scheduler.optimizer
+        # Print the first input batch and model output vectors (logits) once at the start
+        first_batch = next(iter(train_loader))
+        # Move all tensors in first_batch to model.device
+        first_batch = [b.to(model.device) for b in first_batch]
+        print(f"[DEBUG] First input batch (token tensors) on device {model.device}:")
+        print(first_batch)
+        with torch.no_grad():
+            kl_loss, recon_loss = model(first_batch)
+            # If recon_loss is a tensor, print its shape and a few values
+            if hasattr(recon_loss, 'shape'):
+                print(f"[DEBUG] Model output recon_loss shape: {recon_loss.shape}")
+                print(f"[DEBUG] Model output recon_loss (first 5 values): {recon_loss.flatten()[:5]}")
+            else:
+                print(f"[DEBUG] Model output recon_loss: {recon_loss}")
         for epoch in range(start_epoch, start_epoch + epochs):
-            stats = self._train_epoch(model, epoch, train_loader, optimizer)
+            stats, early_stop = self._train_epoch(model, epoch, train_loader, optimizer)
+            if early_stop:
+                print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion.")
+                break
             # After each epoch, evaluate on validation set to get val_loss
             model.eval()
             # Use identical structure to _train_epoch for validation
@@ -72,6 +100,10 @@ class VAETrainer:
             val_kl = 0.0
             val_recon = 0.0
             val_samples = 0
+            # Early stopping for any mode if loss < min_loss
+            if stats['loss'] < min_loss:
+                print(f"[EARLY STOP] Loss {stats['loss']:.4f} < min_loss ({min_loss}) at epoch {epoch+1}, stopping training.")
+                break
             from tqdm import tqdm
             with torch.no_grad():
                 val_iter = tqdm(val_loader, desc=f"Val (epoch {epoch+1})")

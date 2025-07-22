@@ -20,7 +20,7 @@ class VAEConfig:
 
         self.freeze_embeddings = False
         # Maximum sequence length (in tokens)
-        self.max_len = 60  # Default maximum number of tokens per sequence
+        self.max_len = 24 #60  # Default maximum number of tokens per sequence
         # Train params
         self.n_batch = 512
         self.clip_grad = 50

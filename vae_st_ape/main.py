@@ -28,7 +28,7 @@ def load_smiles_file(path, limit=None):
 DEBUG = False
 
 def main():
-    global DEBUG
+    global DEBUG, model, single_train_batch, train_dataset, idx_to_token
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=4)
@@ -38,6 +38,8 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug prints')
     parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy'], help='Which model to use: vae (default) or vaedummy (plain LSTM autoencoder)')
     parser.add_argument('--gen_vocab', action='store_true', help='Train tokenizer from data and save vocab (then exit)')
+    parser.add_argument('--single_batch', action='store_true', help='Train and eval on a single batch for overfitting/debugging')
+    parser.add_argument('--min_loss', type=float, default=0.1, help='Minimum loss threshold for early stopping')
     args = parser.parse_args()
 
     if args.gen_vocab:
@@ -109,15 +111,43 @@ def main():
     # random.seed(args.seed)
     np.random.seed(args.seed)
 
+    if args.single_batch:
+        args.epochs = 20
+        args.batch_size = 4
+        config = get_default_config()
+        config.n_batch = 4
+        DEBUG = args.debug
+
     # Load config
     config = get_default_config()
     # Load real dataset splits
     train_smiles = load_smiles_file('data_trn.txt')
     val_smiles = load_smiles_file('data_val.txt')
     test_smiles = load_smiles_file('data_tst.txt')
-    train_loader, _ = get_data_loaders(train_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False, config=config)
-    val_loader, _ = get_data_loaders(val_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False, config=config)
-    test_loader, _ = get_data_loaders(test_smiles, batch_size=args.batch_size, tokenizer=tokenizer, shuffle=False, config=config)
+    train_loader, tokenizer = get_data_loaders(train_smiles, batch_size=config.n_batch, shuffle=True, tokenizer=tokenizer, config=config)
+    val_loader, _ = get_data_loaders(val_smiles, batch_size=config.n_batch, shuffle=False, tokenizer=tokenizer, config=config)
+    test_loader, _ = get_data_loaders(test_smiles, batch_size=config.n_batch, shuffle=False, tokenizer=tokenizer, config=config)
+
+    if args.single_batch:
+        # Use only the first batch for both train and val
+        train_iter = iter(train_loader)
+        val_iter = iter(val_loader)
+        single_train_batch = [next(train_iter)]
+        single_val_batch = [next(val_iter)]
+        class SingleBatchLoader:
+            def __iter__(self):
+                while True:
+                    yield single_train_batch[0]
+            def __len__(self):
+                return 1
+        class SingleValBatchLoader:
+            def __iter__(self):
+                while True:
+                    yield single_val_batch[0]
+            def __len__(self):
+                return 1
+        train_loader = SingleBatchLoader()
+        val_loader = SingleValBatchLoader()
 
     # Diagnostic: print first batch of SMILES from both loaders
     print("\n[DIAGNOSTIC] Printing first batch of SMILES from train and val loaders:")
@@ -129,7 +159,20 @@ def main():
     from data_loader import StringDataset
     train_dataset = StringDataset(train_smiles, tokenizer=tokenizer)
     val_dataset = StringDataset(val_smiles, tokenizer=tokenizer)
-    # --- Robust decoding: filter tokens not in SELFIES alphabet and <unk> before decoding ---
+    # --- Robust decoding: filter tokens not in SELFIES alphabet and <unk> 
+
+
+    # Diagnostic: print first batch of SMILES from both loaders
+    print("\n[DIAGNOSTIC] Printing first batch of SMILES from train and val loaders:")
+    train_iter = iter(train_loader)
+    val_iter = iter(val_loader)
+    train_batch = next(train_iter)
+    val_batch = next(val_iter)
+    # Decode tokens back to SMILES for comparison
+    from data_loader import StringDataset
+    train_dataset = StringDataset(train_smiles, tokenizer=tokenizer)
+    val_dataset = StringDataset(val_smiles, tokenizer=tokenizer)
+    # --- Robust decoding: filter tokens not in SELFIES alphabet and <unk> 
     import selfies
     selfies_alphabet = set(selfies.get_semantic_robust_alphabet())
     import selfies as selfies_lib
@@ -250,7 +293,7 @@ def main():
     if 'scheduler_state_dict' in metadata:
         scheduler.load_state_dict(metadata['scheduler_state_dict'])
     trainer = VAETrainer(config)
-    trainer.fit(model, train_loader, val_loader, logger=logger, epochs=args.epochs, lr=config.lr_start, scheduler=scheduler, checkpoint_dir=checkpoint_dir, start_epoch=start_epoch)
+    trainer.fit(model, train_loader, val_loader, logger=logger, epochs=args.epochs, lr=config.lr_start, scheduler=scheduler, checkpoint_dir=checkpoint_dir, start_epoch=start_epoch, min_loss=args.min_loss)
      
     # save log with a timestamp
     timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -384,3 +427,55 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+    # After training: if single_batch, print input and reconstructions
+    import sys
+    if '--single_batch' in sys.argv:
+        try:
+            print("\n[SINGLE BATCH DEBUG] Printing input and reconstructed SMILES after training:")
+            model.eval()
+            with torch.no_grad():
+                batch = single_train_batch[0]
+                # Move to device if needed
+                if hasattr(batch[0], 'to'):
+                    batch = [b.to(model.x_emb.weight.device) for b in batch]
+                # Get reconstructions
+                if hasattr(model, 'tensor2string'):
+                    recons = [model.tensor2string(b) for b in batch]
+                else:
+                    # fallback: try robust_decode
+                    from main import robust_decode
+                    _, recons = robust_decode(batch, train_dataset, idx_to_token)
+                # Get original SMILES
+                origs = [train_dataset.decode_tokens(b.tolist()) for b in batch]
+                print(f"{'Original':<32} | {'Reconstructed':<32}")
+                print('-'*68)
+                for orig, recon in zip(origs, recons):
+                    print(f"{orig:<32} | {recon:<32}")
+                # Debug: print first 5 input/output token sequences and their decoded SMILES
+                print("\n[DEBUG] First 5 input/output token sequences and decoded SMILES:")
+                for i in range(min(5, len(batch))):
+                    input_tokens = batch[i].tolist()
+                    output_tokens = None
+                    # Try to get output tokens from model if possible
+                    if hasattr(model, 'sample'):
+                        with torch.no_grad():
+                            z, _ = model.forward_encoder(batch[i].unsqueeze(0))
+                            out_tensor = model.sample(1, max_len=len(batch[i]), z=z, return_tensor=True)[0]
+                        output_tokens = out_tensor.tolist()
+                    else:
+                        output_tokens = None
+                    print(f"[DEBUG] Input {i}: tokens={input_tokens}")
+                    print(f"[DEBUG] Input {i}: decoded SMILES={origs[i]}")
+                    if output_tokens is not None:
+                        print(f"[DEBUG] Output {i}: tokens={output_tokens}")
+                        # Decode output tokens to SMILES
+                        if hasattr(model, 'tensor2string'):
+                            decoded_out = model.tensor2string(out_tensor)
+                            print(f"[DEBUG] Output {i}: decoded SMILES={decoded_out}")
+                        else:
+                            print(f"[DEBUG] Output {i}: decoded SMILES={recons[i]}")
+                    else:
+                        print(f"[DEBUG] Output {i}: tokens=N/A")
+        except Exception as e:
+            print("[SINGLE BATCH DEBUG] Error printing reconstructions:", e)
