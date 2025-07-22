@@ -8,8 +8,8 @@ except ImportError:
 
 class VAEDummy2(nn.Module):
     """
-    Pure LSTM encoder-decoder for integer sequence experiments (no tokenizer, no SMILES/SELFIES).
-    Use for internal debugging/sanity-checks only.
+    LSTM encoder-decoder for sequence experiments. Supports SMILES → SELFIES → tokens (APETokenizer) and token ids → SMILES.
+    Use for debugging or as a minimal molecular autoencoder.
     """
     def __init__(self, vocab_size=10, emb_dim=16, hidden_dim=32, num_layers=1, max_len=8):
         super().__init__()
@@ -22,9 +22,40 @@ class VAEDummy2(nn.Module):
         self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
+
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def string2tensor(self, smiles, tokenizer, device=None):
+        """
+        Convert SMILES to SELFIES, then to token ids using APETokenizer.
+        Returns a tensor of token ids.
+        """
+        import selfies
+        selfies_str = selfies.encoder(smiles)
+        ids = tokenizer.encode(selfies_str, add_special_tokens=True)
+        device = device or self.device
+        return torch.tensor(ids, dtype=torch.long, device=device)
+
+    def tensor2string(self, token_ids, tokenizer):
+        """
+        Convert token ids to tokens, join to SELFIES, decode to SMILES.
+        """
+        import selfies
+        ids = token_ids.tolist() if hasattr(token_ids, 'tolist') else list(token_ids)
+        tokens = tokenizer.convert_ids_to_tokens(ids)
+        # Remove special tokens
+        special_tokens = set(tokenizer.special_tokens.keys()) if hasattr(tokenizer, 'special_tokens') else {'<unk>', '<pad>', '<s>', '</s>', '<mask>'}
+        tokens = [tok for tok in tokens if tok not in special_tokens]
+        selfies_str = ''.join(tokens)
+        try:
+            smiles = selfies.decoder(selfies_str)
+        except Exception as e:
+            print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
+            smiles = ''
+        return smiles
+
     def forward(self, x):
         # x: [batch, seq_len] integer tokens
         emb = self.embedding(x)
@@ -36,15 +67,18 @@ class VAEDummy2(nn.Module):
         out, _ = self.decoder(dec_emb, (h, c))
         logits = self.fc_out(out)
         return logits
-    def sample(self, batch_size=1, max_len=None, device=None):
+
+    def sample(self, batch_size=1, max_len=None, device=None, h=None, c=None):
         if max_len is None:
             max_len = self.max_len
         if device is None:
             device = self.device
         # Start with start token 0
         inputs = torch.zeros(batch_size, 1, dtype=torch.long, device=device)
-        h = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
-        c = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
+        if h is None:
+            h = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
+        if c is None:
+            c = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
         outputs = []
         for _ in range(max_len):
             emb = self.embedding(inputs[:, -1:])
@@ -55,6 +89,7 @@ class VAEDummy2(nn.Module):
             inputs = torch.cat([inputs, next_token], dim=1)
         outputs = torch.cat(outputs, dim=1)
         return outputs
+
 
 class VAEDummy(nn.Module):
     def forward_encoder(self, x):

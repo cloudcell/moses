@@ -43,43 +43,56 @@ def main():
     args = parser.parse_args()
 
     if args.model_type == 'vaedummy2':
-        print("[INFO] Using VAEDummy2: integer LSTM sanity-check model (no SMILES/tokenizer logic).")
-        if args.vocab_file is not None:
-            print("[WARNING] --vocab_file is ignored for vaedummy2.")
+        print("[INFO] Using VAEDummy2: LSTM model for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
         import torch
         import torch.nn.functional as F
         from model import VAEDummy2
-        # Dummy integer data
-        class DummyDataset(torch.utils.data.Dataset):
-            def __init__(self, num_samples=32, seq_len=8, vocab_size=10):
-                self.data = torch.randint(1, vocab_size, (num_samples, seq_len))
-            def __len__(self):
-                return len(self.data)
-            def __getitem__(self, idx):
-                return self.data[idx]
+        from apetokenizer.ape_tokenizer import APETokenizer
+        import selfies
+        # Example SMILES strings (could be loaded from file)
+        smiles_list = [
+            'CCO',
+            'c1ccccc1',
+            'CC(=O)O',
+            'C1=CC=CN=C1',
+            'CCN(CC)CC',
+        ]
+        tokenizer = APETokenizer()
+        tokenizer.train([selfies.encoder(s) for s in smiles_list], type="selfies")
+        vocab_size = len(tokenizer)
         device = torch.device(args.device)
-        model = VAEDummy2().to(device)
-        dataset = DummyDataset(num_samples=32, seq_len=8, vocab_size=10)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True)
+        model = VAEDummy2(vocab_size=vocab_size, emb_dim=32, hidden_dim=64, num_layers=1, max_len=24).to(device)
+        # Prepare tokenized dataset
+        token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in smiles_list]
+        # Pad to max length
+        max_len = max(t.size(0) for t in token_tensors)
+        padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
+        for i, t in enumerate(token_tensors):
+            padded[i, :t.size(0)] = t
+        loader = torch.utils.data.DataLoader(padded, batch_size=2, shuffle=True)
         opt = torch.optim.Adam(model.parameters(), lr=1e-2)
-        for epoch in range(50):
+        for epoch in range(100):
             for batch in loader:
-                batch = batch.to(device)
                 logits = model(batch)
-                loss = F.cross_entropy(logits.view(-1, model.vocab_size), batch.view(-1))
+                loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-            if epoch % 10 == 0:
+            if epoch % 20 == 0:
                 print(f"Epoch {epoch} loss: {loss.item():.4f}")
-        # Test model on a sample
+        # Test model on all samples
         model.eval()
         with torch.no_grad():
-            sample = dataset[0].unsqueeze(0).to(device)
-            out_logits = model(sample)
-            out_seq = torch.argmax(out_logits, dim=-1)
-            print("Input: ", sample.cpu().numpy())
-            print("Recon: ", out_seq.cpu().numpy())
+            for i, s in enumerate(smiles_list):
+                t = model.string2tensor(s, tokenizer, device=device).unsqueeze(0)
+                out_logits = model(t)
+                out_ids = torch.argmax(out_logits, dim=-1)[0]
+                recon_smiles = model.tensor2string(out_ids, tokenizer)
+                print(f"Input SMILES: {s}")
+                print(f"Input token ids: {t.squeeze(0).tolist()}")
+                print(f"Recon token ids: {out_ids.tolist()}")
+                print(f"Recon SMILES:  {recon_smiles}")
+                print('-'*40)
         return
 
     if args.gen_vocab:
