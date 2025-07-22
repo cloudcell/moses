@@ -11,7 +11,7 @@ class VAEDummy2(nn.Module):
     LSTM encoder-decoder for sequence experiments. Supports SMILES → SELFIES → tokens (APETokenizer) and token ids → SMILES.
     Use for debugging or as a minimal molecular autoencoder.
     """
-    def __init__(self, vocab_size=10, emb_dim=16, hidden_dim=32, num_layers=1, max_len=8):
+    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, num_layers=3, max_len=24):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
