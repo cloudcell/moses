@@ -138,12 +138,26 @@ class VAEDummy(nn.Module):
         if max_len is None:
             max_len = getattr(self, 'config', None) and getattr(self.config, 'max_len', 100) or 100
         with torch.no_grad():
+            # If z is not provided, encode random input (or use zeros)
+            if z is None:
+                z = torch.randn(n_batch, self.config.q_d_h, device=self.device)
+            # Project z to decoder hidden/cell state using enc2dec_h/c
+            h_proj = self.enc2dec_h(z)
+            c_proj = self.enc2dec_c(z)
+            if h_proj.dim() == 2:
+                h_0 = h_proj.unsqueeze(0).repeat(self.config.d_n_layers, 1, 1)
+                c_0 = c_proj.unsqueeze(0).repeat(self.config.d_n_layers, 1, 1)
+            elif h_proj.dim() == 3:
+                h_0 = h_proj
+                c_0 = c_proj
+            else:
+                raise ValueError(f"Unexpected z shape after projection: {h_proj.shape}")
             w = torch.tensor(self.bos, device=self.device).repeat(n_batch)
             x = torch.tensor([self.pad], device=self.device).repeat(n_batch, max_len)
             x[:, 0] = self.bos
-            h = None
             eos_mask = torch.zeros(n_batch, dtype=torch.bool, device=self.device)
             end_pads = torch.tensor([max_len], device=self.device).repeat(n_batch)
+            h = (h_0, c_0)
             for i in range(1, max_len):
                 x_emb = self.x_emb(w).unsqueeze(1)
                 o, h = self.decoder_rnn(x_emb, h)
