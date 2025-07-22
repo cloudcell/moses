@@ -54,7 +54,7 @@ class VAENovo(nn.Module):
         self.max_len = max_len
         self.embedding = nn.Embedding(vocab_size, emb_dim)
         self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
-
+        
         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
         self.latent2dec = nn.Linear(self.latent_dim, self.hidden_dim)
@@ -166,9 +166,17 @@ class VAEDummy2(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.max_len = max_len
+        # embedding
         self.embedding = nn.Embedding(vocab_size, emb_dim)
+        # encoder
         self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+        # dropout
+        self.dropout = nn.Dropout(0.1)
+        # decoder
         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+        # dropout
+        self.dropout2 = nn.Dropout(0.1)
+        # output layer
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
 
         # initialize the random number generator
@@ -235,15 +243,21 @@ class VAEDummy2(nn.Module):
         print(f"[tensor2string] decoded SMILES: '{smiles}'")
         return smiles
 
+    # include dropout in forward
     def forward(self, x):
         # x: [batch, seq_len] integer tokens
         emb = self.embedding(x)
         _, (h, c) = self.encoder(emb)
+        # dropout
+        h = self.dropout(h)
+        c = self.dropout(c)
         # Decoder input: shift x right, prepend 0 (start token)
         dec_in = torch.zeros_like(x)
         dec_in[:, 1:] = x[:, :-1]
         dec_emb = self.embedding(dec_in)
         out, _ = self.decoder(dec_emb, (h, c))
+        # dropout
+        out = self.dropout2(out)
         logits = self.fc_out(out)
         return logits
 
