@@ -1,6 +1,6 @@
 import torch
 from trainer import VAETrainer
-from model import VAE, VAEDummy
+from model import VAE, VAEDummy, VAEDummy2
 from config import get_default_config
 from data_loader import get_data_loaders
 from utils import Logger
@@ -36,11 +36,51 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vocab_file', type=str, default=None, help='Path to APETokenizer vocab file (tokenizer.json). If not provided, will download from HuggingFace Hub.')
     parser.add_argument('--debug', action='store_true', help='Enable debug prints')
-    parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy'], help='Which model to use: vae (default) or vaedummy (plain LSTM autoencoder)')
+    parser.add_argument('--model_type', type=str, default='vae', choices=['vae', 'vaedummy', 'vaedummy2'], help='Which model to use: vae (default), vaedummy (plain LSTM autoencoder), or vaedummy2 (integer LSTM)')
     parser.add_argument('--gen_vocab', action='store_true', help='Train tokenizer from data and save vocab (then exit)')
     parser.add_argument('--single_batch', action='store_true', help='Train and eval on a single batch for overfitting/debugging')
     parser.add_argument('--min_loss', type=float, default=0.1, help='Minimum loss threshold for early stopping')
     args = parser.parse_args()
+
+    if args.model_type == 'vaedummy2':
+        print("[INFO] Using VAEDummy2: integer LSTM sanity-check model (no SMILES/tokenizer logic).")
+        if args.vocab_file is not None:
+            print("[WARNING] --vocab_file is ignored for vaedummy2.")
+        import torch
+        import torch.nn.functional as F
+        from model import VAEDummy2
+        # Dummy integer data
+        class DummyDataset(torch.utils.data.Dataset):
+            def __init__(self, num_samples=32, seq_len=8, vocab_size=10):
+                self.data = torch.randint(1, vocab_size, (num_samples, seq_len))
+            def __len__(self):
+                return len(self.data)
+            def __getitem__(self, idx):
+                return self.data[idx]
+        device = torch.device(args.device)
+        model = VAEDummy2().to(device)
+        dataset = DummyDataset(num_samples=32, seq_len=8, vocab_size=10)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+        for epoch in range(50):
+            for batch in loader:
+                batch = batch.to(device)
+                logits = model(batch)
+                loss = F.cross_entropy(logits.view(-1, model.vocab_size), batch.view(-1))
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch} loss: {loss.item():.4f}")
+        # Test model on a sample
+        model.eval()
+        with torch.no_grad():
+            sample = dataset[0].unsqueeze(0).to(device)
+            out_logits = model(sample)
+            out_seq = torch.argmax(out_logits, dim=-1)
+            print("Input: ", sample.cpu().numpy())
+            print("Recon: ", out_seq.cpu().numpy())
+        return
 
     if args.gen_vocab:
         # Train tokenizer from all data and save vocab

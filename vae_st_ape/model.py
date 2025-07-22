@@ -6,6 +6,56 @@ try:
 except ImportError:
     DEBUG = False
 
+class VAEDummy2(nn.Module):
+    """
+    Pure LSTM encoder-decoder for integer sequence experiments (no tokenizer, no SMILES/SELFIES).
+    Use for internal debugging/sanity-checks only.
+    """
+    def __init__(self, vocab_size=10, emb_dim=16, hidden_dim=32, num_layers=1, max_len=8):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.emb_dim = emb_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.max_len = max_len
+        self.embedding = nn.Embedding(vocab_size, emb_dim)
+        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc_out = nn.Linear(hidden_dim, vocab_size)
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    def forward(self, x):
+        # x: [batch, seq_len] integer tokens
+        emb = self.embedding(x)
+        _, (h, c) = self.encoder(emb)
+        # Decoder input: shift x right, prepend 0 (start token)
+        dec_in = torch.zeros_like(x)
+        dec_in[:, 1:] = x[:, :-1]
+        dec_emb = self.embedding(dec_in)
+        out, _ = self.decoder(dec_emb, (h, c))
+        logits = self.fc_out(out)
+        return logits
+    def sample(self, batch_size=1, max_len=None, device=None):
+        if max_len is None:
+            max_len = self.max_len
+        if device is None:
+            device = self.device
+        # Start with start token 0
+        inputs = torch.zeros(batch_size, 1, dtype=torch.long, device=device)
+        h = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
+        c = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
+        outputs = []
+        for _ in range(max_len):
+            emb = self.embedding(inputs[:, -1:])
+            out, (h, c) = self.decoder(emb, (h, c))
+            logits = self.fc_out(out[:, -1, :])
+            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+            outputs.append(next_token)
+            inputs = torch.cat([inputs, next_token], dim=1)
+        outputs = torch.cat(outputs, dim=1)
+        return outputs
+
 class VAEDummy(nn.Module):
     def forward_encoder(self, x):
         # For compatibility: return encoder hidden state and kl_loss=0
