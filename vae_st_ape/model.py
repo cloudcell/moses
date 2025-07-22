@@ -134,7 +134,7 @@ class VAEDummy(nn.Module):
         )
         kl_loss = torch.tensor(0.0, device=self.device)
         return kl_loss, recon_loss
-    def sample(self, n_batch, max_len=None, z=None, temp=1.0):
+    def sample(self, n_batch, max_len=None, z=None, temp=1.0, return_tensor=False):
         if max_len is None:
             max_len = getattr(self, 'config', None) and getattr(self.config, 'max_len', 100) or 100
         with torch.no_grad():
@@ -157,7 +157,10 @@ class VAEDummy(nn.Module):
             new_x = []
             for i in range(x.size(0)):
                 new_x.append(x[i, :end_pads[i]])
-            return [self.tensor2string(i_x) for i_x in new_x]
+            decoded = [self.tensor2string(i_x) for i_x in new_x]
+            if return_tensor:
+                return decoded, [i_x.cpu() for i_x in new_x]
+            return decoded
 
 class VAE(nn.Module):
     def __init__(self, tokenizer, config):

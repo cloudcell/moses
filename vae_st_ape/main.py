@@ -381,10 +381,56 @@ def main():
                 vocab_ids = set(range(len(tokenizer)))
                 for token_id in input_ids:
                     assert token_id in vocab_ids, f"Unknown token_id {token_id} in input: {input_ids} (vocab size: {len(tokenizer)})"
+                # Diagnostic: print the target (input) tokens and decoded SMILES for the first 5 samples
+                if idx < 5:
+                    token_strs = tokenizer.convert_ids_to_tokens(input_ids)
+                    print(f"[TEST DIAG] Sample {idx}: input tokens = {input_ids}")
+                    print(f"[TEST DIAG] Sample {idx}: token strings = {token_strs}")
+                    # Remove special tokens for decoding
+                    special_tokens = set([
+                        tokenizer.pad_token,
+                        tokenizer.bos_token,
+                        tokenizer.eos_token,
+                        tokenizer.unk_token,
+                        tokenizer.mask_token
+                    ])
+                    filtered_tokens = [tok for tok in token_strs if tok not in special_tokens]
+                    selfies_str = ''.join(filtered_tokens)
+                    try:
+                        decoded = selfies.decoder(selfies_str)
+                    except Exception as e:
+                        decoded = f"[DecoderError: {e}]"
+                    print(f"[TEST DIAG] Sample {idx}: decoded SMILES = {decoded}")
                 with torch.no_grad():
                     z, _ = model.forward_encoder(input_tensor)
-                    out_tokens = model.sample(1, max_len=len(s)+10, z=z)  # returns list of SMILES via new pipeline
-                    out = out_tokens[0]  # already SMILES via tensor2string
+                    # Get both decoded SMILES and output token tensor if possible
+                    if hasattr(model, 'sample') and 'return_tensor' in model.sample.__code__.co_varnames:
+                        out_decoded, out_token_tensors = model.sample(1, max_len=len(s)+10, z=z, return_tensor=True)
+                        out = out_decoded[0]
+                        out_token_tensor = out_token_tensors[0]
+                        out_token_indices = out_token_tensor.tolist()
+                        out_token_strs = tokenizer.convert_ids_to_tokens(out_token_indices)
+                        if idx < 5:
+                            print(f"[TEST DIAG] Sample {idx}: output token indices = {out_token_indices}")
+                            print(f"[TEST DIAG] Sample {idx}: output token strings = {out_token_strs}")
+                            # Remove special tokens for decoding
+                            special_tokens = set([
+                                tokenizer.pad_token,
+                                tokenizer.bos_token,
+                                tokenizer.eos_token,
+                                tokenizer.unk_token,
+                                tokenizer.mask_token
+                            ])
+                            filtered_tokens = [tok for tok in out_token_strs if tok not in special_tokens]
+                            selfies_str = ''.join(filtered_tokens)
+                            try:
+                                decoded = selfies.decoder(selfies_str)
+                            except Exception as e:
+                                decoded = f"[DecoderError: {e}]"
+                            print(f"[TEST DIAG] Sample {idx}: output decoded SMILES = {decoded}")
+                    else:
+                        out_tokens = model.sample(1, max_len=len(s)+10, z=z)
+                        out = out_tokens[0]
                 valid = is_valid_smiles(out)
                 log_f.write(f"IN : {s}\n")
                 same = False
@@ -461,7 +507,8 @@ if __name__ == '__main__':
                     if hasattr(model, 'sample'):
                         with torch.no_grad():
                             z, _ = model.forward_encoder(batch[i].unsqueeze(0))
-                            out_tensor = model.sample(1, max_len=len(batch[i]), z=z, return_tensor=True)[0]
+                            decoded, out_tensors = model.sample(1, max_len=len(batch[i]), z=z, return_tensor=True)
+                            out_tensor = out_tensors[0]
                         output_tokens = out_tensor.tolist()
                     else:
                         output_tokens = None
