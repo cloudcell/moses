@@ -44,7 +44,7 @@ class VAENovo(nn.Module):
     """
     Minimal LSTM-based VAE: LSTM encoder, latent z (mu/logvar), reparameterization, LSTM decoder, KL/recon loss.
     """
-    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, latent_dim=32, num_layers=1, max_len=24):
+    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, latent_dim=256, num_layers=1, max_len=24):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
@@ -57,6 +57,7 @@ class VAENovo(nn.Module):
 
         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
+        self.latent2dec = nn.Linear(self.latent_dim, self.hidden_dim)
         # Weight init
         self.embedding.weight.data.uniform_(-0.1, 0.1)
         self.fc_out.weight.data.uniform_(-0.1, 0.1)
@@ -101,35 +102,53 @@ class VAENovo(nn.Module):
         # x: [batch, seq_len]
         emb = self.embedding(x)
         _, (h, _) = self.encoder(emb)
-        z = h[-1]  # [batch, hidden_dim]
-        return z
+        h = h[-1]  # [batch, hidden_dim]
+        mu = nn.Linear(self.hidden_dim, self.latent_dim).to(h.device)(h)
+        logvar = nn.Linear(self.hidden_dim, self.latent_dim).to(h.device)(h)
+        return mu, logvar
 
-    def reparameterize(self, z):
-        # In simplified VAE, just pass through (no sampling)
-        return z
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
-    def decode(self, z, x):
-        # z: [batch, hidden_dim], x: [batch, seq_len]
-        batch_size = x.size(0)
-        emb = self.embedding(x)
-        # Use z as initial hidden state for decoder
-        h0 = z.unsqueeze(0).repeat(self.num_layers, 1, 1)
+    def decode(self, z, seq_len, input_tokens=None):
+        # z: [batch, latent_dim], seq_len: int, input_tokens: [batch, seq_len] or None
+        batch_size = z.size(0)
+        z_proj = self.latent2dec(z)
+        h0 = z_proj.unsqueeze(0).repeat(self.num_layers, 1, 1)
         c0 = torch.zeros_like(h0)
-        out, _ = self.decoder(emb, (h0, c0))
-        logits = self.fc_out(out)
-        return logits
+        outputs = []
+        if input_tokens is not None:
+            # Teacher forcing (training): decode using ground-truth tokens
+            emb = self.embedding(input_tokens)
+            out, _ = self.decoder(emb, (h0, c0))
+            logits = self.fc_out(out)
+            return logits
+        else:
+            # Inference: generate tokens autoregressively
+            input_token = torch.full((batch_size, 1), 2, dtype=torch.long, device=z.device)  # Assume BOS=2
+            for _ in range(seq_len):
+                emb = self.embedding(input_token)
+                out, (h0, c0) = self.decoder(emb, (h0, c0))
+                logits = self.fc_out(out[:, -1, :])
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                outputs.append(next_token)
+                input_token = next_token
+            outputs = torch.cat(outputs, dim=1)
+            return outputs
     def forward(self, x, kl_weight=1.0):
-        z = self.encode(x)
-        z = self.reparameterize(z)
-        logits = self.decode(z, x)
-        # Shift targets for teacher forcing
+        # x: [batch, seq_len]
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        logits = self.decode(z, x.size(1), input_tokens=x[:, :-1])
         recon_loss = F.cross_entropy(
-            logits[:, :-1, :].contiguous().view(-1, self.vocab_size),
+            logits.contiguous().view(-1, self.vocab_size),
             x[:, 1:].contiguous().view(-1),
             ignore_index=1  #self.tokenizer.pad_token_id
         )
-        kl_loss = torch.tensor(0.0, device=x.device)
-        total_loss = recon_loss
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
+        total_loss = recon_loss + kl_weight * kl_loss
         if DEBUG:
             print(f"[DEBUG] recon_loss={recon_loss.item():.4f}, kl_loss={kl_loss.item():.4f}, kl_weight={kl_weight:.4f}, total_loss={total_loss.item():.4f}")
         return recon_loss, kl_loss, total_loss

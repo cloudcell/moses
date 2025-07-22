@@ -428,7 +428,7 @@ def main():
         vocab_size = len(tokenizer)
         device = torch.device(args.device)
         # model = VAENovo(vocab_size=vocab_size, emb_dim=1024, hidden_dim=256, latent_dim=128, num_layers=2, max_len=24).to(device)
-        model = VAENovo(vocab_size=vocab_size, emb_dim=256*2, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)
+        model = VAENovo(vocab_size=vocab_size, emb_dim=1024, hidden_dim=128*2, latent_dim=256*2, num_layers=2, max_len=24).to(device)
         # Prepare tokenized training set
         token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
         max_len = max(t.size(0) for t in token_tensors)
