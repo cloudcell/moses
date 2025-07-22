@@ -58,48 +58,98 @@ def main():
         tokenizer = APETokenizer()
         tokenizer.load_vocabulary(args.vocab_file)
         print(f"[INFO] Loaded vocab size: {len(tokenizer)}")
-        # Example SMILES strings (could be loaded from file)
-        smiles_list = [
-            'CCO',
-            'c1ccccc1',
-            'CC(=O)O',
-            'C1=CC=CN=C1',
-            'CCN(CC)CC',
-        ]
+        # Load SMILES from data files
+        def load_smiles_file(path, limit=None):
+            smiles = []
+            with open(path, 'r') as f:
+                for i, line in enumerate(f):
+                    if limit is not None and i >= limit:
+                        break
+                    s = line.strip()
+                    if s:
+                        smiles.append(s)
+            return smiles
+        train_smiles = load_smiles_file('data_trn.txt')
+        val_smiles = load_smiles_file('data_val.txt')
+        test_smiles = load_smiles_file('data_tst.txt')
+        print(f"[INFO] Loaded {len(train_smiles)} train, {len(val_smiles)} val, {len(test_smiles)} test molecules.")
+        # For fast debug, use only first 1000 train/val/test
+        N = 1000
+        train_smiles = train_smiles[:N]
+        val_smiles = val_smiles[:N]
+        test_smiles = test_smiles[:N]
         vocab_size = len(tokenizer)
         device = torch.device(args.device)
         model = VAEDummy2(vocab_size=vocab_size, emb_dim=32, hidden_dim=64, num_layers=1, max_len=24).to(device)
-        # Prepare tokenized dataset
-        token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in smiles_list]
-        # Pad to max length
+        # Prepare tokenized training set
+        token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
         max_len = max(t.size(0) for t in token_tensors)
         padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
         for i, t in enumerate(token_tensors):
             padded[i, :t.size(0)] = t
-        loader = torch.utils.data.DataLoader(padded, batch_size=2, shuffle=True)
+        loader = torch.utils.data.DataLoader(padded, batch_size=16, shuffle=True)
+        from tqdm import tqdm
+        import datetime as dt
+        import os
         opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+        tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
         for epoch in range(100):
-            for batch in loader:
+            epoch_loss = 0.0
+            pbar = tqdm(loader, desc=f"Epoch {epoch}", **tqdm_bar_args)
+            for batch_idx, batch in enumerate(pbar):
                 logits = model(batch)
                 loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-            if epoch % 20 == 0:
-                print(f"Epoch {epoch} loss: {loss.item():.4f}")
-        # Test model on all samples
+                epoch_loss += loss.item() * batch.size(0)
+                avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))
+                pbar.set_postfix(loss=f"{avg_loss:.4f}")
+            epoch_loss /= len(loader.dataset)
+        # Evaluate on test set, save results
         model.eval()
-        with torch.no_grad():
-            for i, s in enumerate(smiles_list):
+        timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        results_dir = "test_results"
+        os.makedirs(results_dir, exist_ok=True)
+        out_path = os.path.join(results_dir, f"test_results_vaedummy2_{timestamp}.txt")
+        from rdkit import Chem
+        with torch.no_grad(), open(out_path, 'w') as f:
+            f.write(f"InputSMILES\tReconSMILES\tInputTokens\tReconTokens\tEditDistance\tCanInputSMILES\tCanReconSMILES\tCanEditDistance\n")
+            for i, s in enumerate(tqdm(test_smiles, desc="Testing", **tqdm_bar_args)):
                 t = model.string2tensor(s, tokenizer, device=device).unsqueeze(0)
                 out_logits = model(t)
                 out_ids = torch.argmax(out_logits, dim=-1)[0]
                 recon_smiles = model.tensor2string(out_ids, tokenizer)
-                print(f"Input SMILES: {s}")
-                print(f"Input token ids: {t.squeeze(0).tolist()}")
-                print(f"Recon token ids: {out_ids.tolist()}")
-                print(f"Recon SMILES:  {recon_smiles}")
-                print('-'*40)
+                input_tokens = t.squeeze(0).tolist()
+                recon_tokens = out_ids.tolist()
+                # Compute edit distance (original)
+                def edit_distance(a, b):
+                    import numpy as np
+                    dp = np.zeros((len(a)+1, len(b)+1), dtype=int)
+                    for i in range(len(a)+1): dp[i,0]=i
+                    for j in range(len(b)+1): dp[0,j]=j
+                    for i in range(1, len(a)+1):
+                        for j in range(1, len(b)+1):
+                            if a[i-1]==b[j-1]:
+                                dp[i,j]=dp[i-1,j-1]
+                            else:
+                                dp[i,j]=1+min(dp[i-1,j],dp[i,j-1],dp[i-1,j-1])
+                    return dp[len(a),len(b)]
+                ed = edit_distance(s, recon_smiles)
+                # Canonicalize SMILES using RDKit
+                def canonicalize(sm):
+                    try:
+                        m = Chem.MolFromSmiles(sm)
+                        if m is None:
+                            return ''
+                        return Chem.MolToSmiles(m, canonical=True)
+                    except Exception:
+                        return ''
+                can_s = canonicalize(s)
+                can_recon = canonicalize(recon_smiles)
+                can_ed = edit_distance(can_s, can_recon)
+                f.write(f"{s}\t{recon_smiles}\t{input_tokens}\t{recon_tokens}\t{ed}\t{can_s}\t{can_recon}\t{can_ed}\n")
+        print(f"[INFO] Test results saved to {out_path}")
         return
 
     if args.gen_vocab:
