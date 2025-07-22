@@ -23,6 +23,25 @@ class VAEDummy2(nn.Module):
         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
 
+        # initialize the random number generator
+        self.rng = torch.Generator()
+        self.rng.manual_seed(42)
+
+        # init weights
+        self.embedding.weight.data.uniform_(-0.1, 0.1)
+        self.fc_out.weight.data.uniform_(-0.1, 0.1)
+        self.fc_out.bias.data.zero_()
+        for name, param in self.encoder.named_parameters():
+            if 'weight' in name:
+                nn.init.uniform_(param, -0.1, 0.1)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+        for name, param in self.decoder.named_parameters():
+            if 'weight' in name:
+                nn.init.uniform_(param, -0.1, 0.1)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+
     @property
     def device(self):
         return next(self.parameters()).device

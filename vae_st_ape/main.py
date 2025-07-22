@@ -80,7 +80,8 @@ def main():
         test_smiles = test_smiles[:N]
         vocab_size = len(tokenizer)
         device = torch.device(args.device)
-        model = VAEDummy2(vocab_size=vocab_size, emb_dim=256, hidden_dim=128, num_layers=2, max_len=24).to(device)
+        # model = VAEDummy2(vocab_size=vocab_size, emb_dim=256*2, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442
+        model = VAEDummy2(vocab_size=vocab_size, emb_dim=1024, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442
         # Prepare tokenized training set
         token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
         max_len = max(t.size(0) for t in token_tensors)
@@ -91,7 +92,9 @@ def main():
         from tqdm import tqdm
         import datetime as dt
         import os
-        opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        from torch.optim.lr_scheduler import ReduceLROnPlateau
+        scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.99, patience=6, min_lr=1e-7)
         tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
         for epoch in range(args.epochs):
             epoch_loss = 0.0
@@ -106,6 +109,9 @@ def main():
                 avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))
                 pbar.set_postfix(loss=f"{avg_loss:.4f}")
             epoch_loss /= len(loader.dataset)
+            scheduler.step(epoch_loss)
+            current_lr = opt.param_groups[0]['lr']
+            print(f"[LR] Epoch {epoch+1}: lr={current_lr:.6g}")
             if epoch_loss < args.min_loss:
                 print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion: {epoch_loss:.6f} < {args.min_loss}")
                 break
