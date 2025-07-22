@@ -91,14 +91,17 @@ def main():
             epoch_loss = 0.0
             pbar = tqdm(loader, desc=f"Epoch {epoch}", **tqdm_bar_args)
             for batch_idx, batch in enumerate(pbar):
-                logits = model(batch)
-                loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
+                logits, mu, logvar, z = model(batch)
+                recon_loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
+                kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch.size(0)
+                kl_weight = 1.0  # You may want to anneal this
+                total_loss = recon_loss + kl_weight * kl_loss
                 opt.zero_grad()
-                loss.backward()
+                total_loss.backward()
                 opt.step()
-                epoch_loss += loss.item() * batch.size(0)
+                epoch_loss += total_loss.item() * batch.size(0)
                 avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))
-                pbar.set_postfix(loss=f"{avg_loss:.4f}")
+                pbar.set_postfix(loss=f"{avg_loss:.4f}", recon=f"{recon_loss.item():.4f}", kl=f"{kl_loss.item():.4f}")
             epoch_loss /= len(loader.dataset)
             scheduler.step(epoch_loss)
             current_lr = opt.param_groups[0]['lr']
@@ -251,12 +254,29 @@ def main():
     
     import torch
     import numpy as np
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # torch.manual_seed(args.seed)
+    # torch.cuda.manual_seed(args.seed)
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
     # random.seed(args.seed)
-    np.random.seed(args.seed)
+    # np.random.seed(args.seed)
+
+    def seed_everything(seed: int):
+        import os, random, numpy as np, torch
+
+        os.environ["PYTHONHASHSEED"] = str(seed)  # must come before heavy imports
+        random.seed(seed)
+        np.random.seed(seed)
+
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)          # for multi-GPU
+
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True)
+
+    seed_everything(args.seed)
 
     if args.single_batch:
         args.epochs = 20

@@ -159,7 +159,7 @@ class VAEDummy2(nn.Module):
     LSTM encoder-decoder for sequence experiments. Supports SMILES → SELFIES → tokens (APETokenizer) and token ids → SMILES.
     Use for debugging or as a minimal molecular autoencoder.
     """
-    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, num_layers=3, max_len=24):
+    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, num_layers=3, max_len=24, enc_dropout=0.1, dec_dropout=0.1):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
@@ -171,17 +171,13 @@ class VAEDummy2(nn.Module):
         # encoder
         self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         # dropout
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(enc_dropout)
         # decoder
         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
         # dropout
-        self.dropout2 = nn.Dropout(0.1)
+        self.dropout2 = nn.Dropout(dec_dropout)
         # output layer
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
-
-        # initialize the random number generator
-        self.rng = torch.Generator()
-        self.rng.manual_seed(42)
 
         # init weights
         self.embedding.weight.data.uniform_(-0.1, 0.1)
@@ -260,6 +256,7 @@ class VAEDummy2(nn.Module):
         out = self.dropout2(out)
         logits = self.fc_out(out)
         return logits
+
 
     def sample(self, batch_size=1, max_len=None, device=None, h=None, c=None):
         if max_len is None:
