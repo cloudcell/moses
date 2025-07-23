@@ -72,14 +72,15 @@ def main():
         vocab_size = len(tokenizer)
         device = torch.device(args.device)
         # model = VAEDummy2(vocab_size=vocab_size, emb_dim=256*2, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442
-        model = VAEDummy2(vocab_size=vocab_size, emb_dim=1024, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442
+        # model = VAEDummy2(vocab_size=vocab_size, emb_dim=1024, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442 -- main
+        model = VAEDummy2(vocab_size=vocab_size, emb_dim=512*2, hidden_dim=128 *2, num_layers=1, max_len=24, enc_dropout=0.1, dec_dropout=0.1).to(device)
         # Prepare tokenized training set
         token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
         max_len = max(t.size(0) for t in token_tensors)
         padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
         for i, t in enumerate(token_tensors):
             padded[i, :t.size(0)] = t
-        loader = torch.utils.data.DataLoader(padded, batch_size=16, shuffle=True)
+        loader = torch.utils.data.DataLoader(padded, batch_size=16, shuffle=True, drop_last=True)
         from tqdm import tqdm
         import datetime as dt
         import os
@@ -91,23 +92,20 @@ def main():
             epoch_loss = 0.0
             pbar = tqdm(loader, desc=f"Epoch {epoch}", **tqdm_bar_args)
             for batch_idx, batch in enumerate(pbar):
-                logits, mu, logvar, z = model(batch)
-                recon_loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
-                kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch.size(0)
-                kl_weight = 1.0  # You may want to anneal this
-                total_loss = recon_loss + kl_weight * kl_loss
+                logits, z = model(batch)
+                loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
                 opt.zero_grad()
-                total_loss.backward()
+                loss.backward()
                 opt.step()
-                epoch_loss += total_loss.item() * batch.size(0)
+                epoch_loss += loss.item() * batch.size(0)
                 avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))
-                pbar.set_postfix(loss=f"{avg_loss:.4f}", recon=f"{recon_loss.item():.4f}", kl=f"{kl_loss.item():.4f}")
+                pbar.set_postfix(loss=f"{avg_loss:.8f}")
             epoch_loss /= len(loader.dataset)
             scheduler.step(epoch_loss)
             current_lr = opt.param_groups[0]['lr']
-            print(f"[LR] Epoch {epoch+1}: lr={current_lr:.6g}")
+            print(f"[LR] Epoch {epoch+1}: lr={current_lr:.8f}")
             if epoch_loss < args.min_loss:
-                print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion: {epoch_loss:.6f} < {args.min_loss}")
+                print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion: {epoch_loss:.8f} < {args.min_loss}")
                 break
         # Evaluate on test set, save results
         model.eval()
@@ -124,7 +122,7 @@ def main():
             f.write("# VAEDummy2 Test Results\n")
             for i, s in enumerate(tqdm(test_smiles, desc="Testing", **tqdm_bar_args)):
                 t = model.string2tensor(s, tokenizer, device=device).unsqueeze(0)
-                out_logits = model(t)
+                out_logits, _ = model(t)
                 out_ids = torch.argmax(out_logits, dim=-1)[0]
                 recon_smiles = model.tensor2string(out_ids, tokenizer)
                 input_tokens = t.squeeze(0).tolist()

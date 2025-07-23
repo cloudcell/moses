@@ -154,49 +154,232 @@ class VAENovo(nn.Module):
         return recon_loss, kl_loss, total_loss
 
 
+# class VAEDummy2(nn.Module):
+#     """
+#     LSTM encoder-decoder for sequence experiments. Supports SMILES → SELFIES → tokens (APETokenizer) and token ids → SMILES.
+#     Use for debugging or as a minimal molecular autoencoder.
+#     """
+#     def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, num_layers=3, max_len=24, enc_dropout=0.1, dec_dropout=0.1):
+#         super().__init__()
+#         self.vocab_size = vocab_size
+#         self.emb_dim = emb_dim
+#         self.hidden_dim = hidden_dim
+#         self.num_layers = num_layers
+#         self.max_len = max_len
+#         # embedding
+#         self.embedding = nn.Embedding(vocab_size, emb_dim)
+#         # encoder
+#         self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+#         # dropout
+#         self.dropout = nn.Dropout(enc_dropout)
+#         # decoder
+#         self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
+#         # dropout
+#         self.dropout2 = nn.Dropout(dec_dropout)
+#         # output layer
+#         self.fc_out = nn.Linear(hidden_dim, vocab_size)
+
+#         # init weights
+#         self.embedding.weight.data.uniform_(-0.1, 0.1)
+#         self.fc_out.weight.data.uniform_(-0.1, 0.1)
+#         self.fc_out.bias.data.zero_()
+#         for name, param in self.encoder.named_parameters():
+#             if 'weight' in name:
+#                 nn.init.uniform_(param, -0.1, 0.1)
+#             elif 'bias' in name:
+#                 nn.init.zeros_(param)
+#         for name, param in self.decoder.named_parameters():
+#             if 'weight' in name:
+#                 nn.init.uniform_(param, -0.1, 0.1)
+#             elif 'bias' in name:
+#                 nn.init.zeros_(param)
+
+#     @property
+#     def device(self):
+#         return next(self.parameters()).device
+
+#     def string2tensor(self, smiles, tokenizer, device=None):
+#         """
+#         Convert SMILES to SELFIES, then to token ids using APETokenizer.
+#         Returns a tensor of token ids.
+#         """
+#         import selfies
+#         selfies_str = selfies.encoder(smiles)
+#         ids = tokenizer.encode(selfies_str, add_special_tokens=True)
+#         device = device or self.device
+#         return torch.tensor(ids, dtype=torch.long, device=device)
+
+#     def tensor2string(self, token_ids, tokenizer):
+#         """
+#         Convert token ids to tokens, join to SELFIES, decode to SMILES. Prints all intermediate steps for debugging.
+#         """
+#         import selfies
+#         ids = token_ids.tolist() if hasattr(token_ids, 'tolist') else list(token_ids)
+#         print(f"[tensor2string] token_ids: {ids}")
+#         tokens = tokenizer.convert_ids_to_tokens(ids)
+#         print(f"[tensor2string] tokens: {tokens}")
+#         # Remove special tokens
+#         if hasattr(tokenizer, 'special_tokens') and tokenizer.special_tokens:
+#             special_tokens = set(tokenizer.special_tokens.keys())
+#         else:
+#             special_tokens = {'<unk>', '<pad>', '<s>', '</s>', '<mask>'}
+#         filtered_tokens = [tok for tok in tokens if tok not in special_tokens]
+#         print(f"[tensor2string] filtered tokens: {filtered_tokens}")
+#         selfies_str = ''.join(filtered_tokens)
+#         print(f"[tensor2string] selfies_str: '{selfies_str}'")
+#         if not filtered_tokens:
+#             print("[tensor2string][WARNING] All tokens filtered out as special tokens. Trying with unfiltered tokens.")
+#             selfies_str = ''.join(tokens)
+#             print(f"[tensor2string] selfies_str (unfiltered): '{selfies_str}'")
+#         try:
+#             smiles = selfies.decoder(selfies_str)
+#         except Exception as e:
+#             print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
+#             smiles = ''
+#         print(f"[tensor2string] decoded SMILES: '{smiles}'")
+#         return smiles
+
+#     # include dropout in forward
+#     def forward(self, x):
+#         # x: [batch, seq_len] integer tokens
+#         emb = self.embedding(x)
+#         _, (h, c) = self.encoder(emb)
+#         # dropout
+#         h = self.dropout(h)
+#         c = self.dropout(c)
+#         # Decoder input: shift x right, prepend 0 (start token)
+#         dec_in = torch.zeros_like(x)
+#         dec_in[:, 1:] = x[:, :-1]
+#         dec_emb = self.embedding(dec_in)
+#         out, _ = self.decoder(dec_emb, (h, c))
+#         # dropout
+#         out = self.dropout2(out)
+#         logits = self.fc_out(out)
+#         return logits
+
+
+#     def sample(self, batch_size=1, max_len=None, device=None, h=None, c=None):
+#         if max_len is None:
+#             max_len = self.max_len
+#         if device is None:
+#             device = self.device
+#         # Start with start token 0
+#         inputs = torch.zeros(batch_size, 1, dtype=torch.long, device=device)
+#         if h is None:
+#             h = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
+#         if c is None:
+#             c = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
+#         outputs = []
+#         for _ in range(max_len):
+#             emb = self.embedding(inputs[:, -1:])
+#             out, (h, c) = self.decoder(emb, (h, c))
+#             logits = self.fc_out(out[:, -1, :])
+#             next_token = torch.argmax(logits, dim=-1, keepdim=True)
+#             outputs.append(next_token)
+#             inputs = torch.cat([inputs, next_token], dim=1)
+#         outputs = torch.cat(outputs, dim=1)
+#         return outputs
+
+
+
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+
+
+import torch
+import torch.nn as nn
+
 class VAEDummy2(nn.Module):
-    """
-    LSTM encoder-decoder for sequence experiments. Supports SMILES → SELFIES → tokens (APETokenizer) and token ids → SMILES.
-    Use for debugging or as a minimal molecular autoencoder.
-    """
-    def __init__(self, vocab_size=10, emb_dim=128, hidden_dim=64, num_layers=3, max_len=24, enc_dropout=0.1, dec_dropout=0.1):
+    def __init__(
+        self,
+        vocab_size: int,
+        emb_dim: int = 512,
+        hidden_dim: int = 256,
+        num_layers: int = 2,
+        latent_dim: int = None,
+        max_len: int = 24,
+        enc_dropout: float = 0.1,
+        dec_dropout: float = 0.1,
+    ):
         super().__init__()
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
+        self.latent_dim = latent_dim or hidden_dim
         self.max_len = max_len
-        # embedding
-        self.embedding = nn.Embedding(vocab_size, emb_dim)
-        # encoder
-        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
-        # dropout
-        self.dropout = nn.Dropout(enc_dropout)
-        # decoder
-        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True)
-        # dropout
-        self.dropout2 = nn.Dropout(dec_dropout)
-        # output layer
-        self.fc_out = nn.Linear(hidden_dim, vocab_size)
+        self.sos_id = 0
 
-        # init weights
-        self.embedding.weight.data.uniform_(-0.1, 0.1)
-        self.fc_out.weight.data.uniform_(-0.1, 0.1)
-        self.fc_out.bias.data.zero_()
-        for name, param in self.encoder.named_parameters():
-            if 'weight' in name:
-                nn.init.uniform_(param, -0.1, 0.1)
-            elif 'bias' in name:
-                nn.init.zeros_(param)
-        for name, param in self.decoder.named_parameters():
-            if 'weight' in name:
-                nn.init.uniform_(param, -0.1, 0.1)
-            elif 'bias' in name:
-                nn.init.zeros_(param)
+
+        self.embedding = nn.Embedding(vocab_size, emb_dim)
+        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True, dropout=enc_dropout)
+        # self.enc_do = nn.Dropout(enc_dropout)
+        self.to_latent = nn.Linear(hidden_dim, self.latent_dim)
+        self.latent2h = nn.Linear(self.latent_dim, hidden_dim * num_layers)
+        self.latent2c = nn.Linear(self.latent_dim, hidden_dim * num_layers)
+        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True, dropout=dec_dropout)  # not using dropout in decoder
+        # self.dec_do = nn.Dropout(dec_dropout)
+        self.fc_out = nn.Linear(hidden_dim, vocab_size)
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.uniform_(self.embedding.weight, -0.1, 0.1)
+        for lin in (self.to_latent, self.latent2h, self.latent2c, self.fc_out):
+            nn.init.xavier_uniform_(lin.weight)
+            nn.init.zeros_(lin.bias)
+        for rnn in (self.encoder, self.decoder):
+            for name, p in rnn.named_parameters():
+                if "weight" in name:
+                    nn.init.xavier_uniform_(p)
+                elif "bias" in name:
+                    nn.init.zeros_(p)
 
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        emb = self.embedding(x)
+        _, (h_n, _) = self.encoder(emb)
+        h_last = h_n[-1]
+
+        # h_last = self.enc_do(h_last) # added dropout instead of LSTM dropout
+
+        z = self.to_latent(h_last)
+        # z = self.enc_do(z)
+        return z
+
+    def decode(self, z: torch.Tensor, max_len: int = None) -> torch.Tensor:
+        
+        # z = self.dec_do(z) # added dropout instead of LSTM dropout
+        
+        B = z.size(0)
+        max_len = max_len or self.max_len
+        h0 = self.latent2h(z).view(B, self.num_layers, self.hidden_dim).transpose(0, 1).contiguous()
+        c0 = self.latent2c(z).view(B, self.num_layers, self.hidden_dim).transpose(0, 1).contiguous()
+        input_ids = torch.full((B, 1), self.sos_id, dtype=torch.long, device=z.device)
+        logits_out = []
+        for _ in range(max_len):
+            emb = self.embedding(input_ids)
+            output, (h0, c0) = self.decoder(emb, (h0, c0))
+            step_logits = self.fc_out(output[:, -1, :])
+            logits_out.append(step_logits.unsqueeze(1))
+            input_ids = step_logits.argmax(-1, keepdim=True)
+        return torch.cat(logits_out, dim=1)
+
+    def forward(self, x: torch.Tensor):
+        z = self.encode(x)
+        
+        logits = self.decode(z, max_len=x.size(1))
+        return logits, z
+
+    def sample(self, batch_size: int = 1, max_len: int = None) -> torch.Tensor:
+        z = torch.randn(batch_size, self.latent_dim, device=self.device)
+        logits = self.decode(z, max_len=max_len)
+        return logits.argmax(-1)                   # (B,T) integer IDs
+
+
 
     def string2tensor(self, smiles, tokenizer, device=None):
         """
@@ -239,46 +422,9 @@ class VAEDummy2(nn.Module):
         print(f"[tensor2string] decoded SMILES: '{smiles}'")
         return smiles
 
-    # include dropout in forward
-    def forward(self, x):
-        # x: [batch, seq_len] integer tokens
-        emb = self.embedding(x)
-        _, (h, c) = self.encoder(emb)
-        # dropout
-        h = self.dropout(h)
-        c = self.dropout(c)
-        # Decoder input: shift x right, prepend 0 (start token)
-        dec_in = torch.zeros_like(x)
-        dec_in[:, 1:] = x[:, :-1]
-        dec_emb = self.embedding(dec_in)
-        out, _ = self.decoder(dec_emb, (h, c))
-        # dropout
-        out = self.dropout2(out)
-        logits = self.fc_out(out)
-        return logits
 
 
-    def sample(self, batch_size=1, max_len=None, device=None, h=None, c=None):
-        if max_len is None:
-            max_len = self.max_len
-        if device is None:
-            device = self.device
-        # Start with start token 0
-        inputs = torch.zeros(batch_size, 1, dtype=torch.long, device=device)
-        if h is None:
-            h = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
-        if c is None:
-            c = torch.zeros(self.num_layers, batch_size, self.hidden_dim, device=device)
-        outputs = []
-        for _ in range(max_len):
-            emb = self.embedding(inputs[:, -1:])
-            out, (h, c) = self.decoder(emb, (h, c))
-            logits = self.fc_out(out[:, -1, :])
-            next_token = torch.argmax(logits, dim=-1, keepdim=True)
-            outputs.append(next_token)
-            inputs = torch.cat([inputs, next_token], dim=1)
-        outputs = torch.cat(outputs, dim=1)
-        return outputs
+
 
 
 class VAEDummy(nn.Module):
