@@ -12,6 +12,16 @@ RDLogger.DisableLog('rdApp.*')
 # import random
 import numpy as np
 import datetime as dt
+from tqdm import tqdm
+import datetime as dt
+import os
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch.nn.functional as F
+from model import VAENovo
+from apetokenizer.ape_tokenizer import APETokenizer
+import selfies
+import sys
+
 
 # Load SMILES from a text file (one per line)
 def load_smiles_file(path, limit=None):
@@ -47,8 +57,27 @@ def main():
         
         cfg = get_vaedummy_config()
 
-
         print("[INFO] Using VAEDummy2: LSTM model for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
+        # --- Logging config and args ---
+        import inspect
+        import sys
+        import datetime as dt
+        import os
+        timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        results_dir = "test_results"
+        os.makedirs(results_dir, exist_ok=True)
+        run_log_path = os.path.join(results_dir, f"run_log_{timestamp}.txt")
+        with open(run_log_path, 'w') as flog:
+            flog.write("# VAEDummy2 Run Log\n")
+            flog.write(f"Timestamp: {timestamp}\n")
+            flog.write("\n[Config]\n")
+            for k, v in vars(cfg).items():
+                flog.write(f"{k}: {v}\n")
+            flog.write("\n[Command Line]\n")
+            flog.write(' '.join(sys.argv) + "\n")
+        # Save path for later appending
+        run_log_append_path = run_log_path
+
         import torch
         import torch.nn.functional as F
         from model import VAEDummy2
@@ -91,13 +120,9 @@ def main():
         padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
         for i, t in enumerate(token_tensors):
             padded[i, :t.size(0)] = t
-        loader = torch.utils.data.DataLoader(padded, batch_size=16, shuffle=True, drop_last=True)
-        from tqdm import tqdm
-        import datetime as dt
-        import os
-        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        from torch.optim.lr_scheduler import ReduceLROnPlateau
-        scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.99, patience=6, min_lr=1e-7)
+        loader = torch.utils.data.DataLoader(padded, batch_size=args.batch_size, shuffle=True, drop_last=True)
+        opt = torch.optim.Adam(model.parameters(), lr=cfg.lr_start)
+        scheduler = ReduceLROnPlateau(opt, mode='min', factor=cfg.lr_factor, patience=cfg.lr_patience, min_lr=cfg.lr_end)
         tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
         for epoch in range(args.epochs):
             epoch_loss = 0.0
@@ -122,15 +147,17 @@ def main():
         model.eval()
         timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
         results_dir = "test_results"
-        os.makedirs(results_dir, exist_ok=True)
-        out_path = os.path.join(results_dir, f"test_results_vaedummy2_{timestamp}.txt")
+        # os.makedirs(results_dir, exist_ok=True)
+        out_path = run_log_path
         from rdkit import Chem
         import collections
-        with torch.no_grad(), open(out_path, 'w') as f:
+        with torch.no_grad(), open(out_path, 'a') as f:  
+            #, open(run_log_append_path, 'a') as flog:
             stats = collections.Counter()
             edit_distances = []
             can_edit_distances = []
             f.write("# VAEDummy2 Test Results\n")
+            # flog.write("\n# VAEDummy2 Test Results\n")
             for i, s in enumerate(tqdm(test_smiles, desc="Testing", **tqdm_bar_args)):
                 t = model.string2tensor(s, tokenizer, device=device).unsqueeze(0)
                 out_logits, _ = model(t)
@@ -189,14 +216,18 @@ def main():
             # Compile and write statistics
             mean_ed = sum(edit_distances)/len(edit_distances) if edit_distances else 0.0
             mean_can_ed = sum(can_edit_distances)/len(can_edit_distances) if can_edit_distances else 0.0
-            f.write("===\n")
-            f.write(f"Total: {stats['total']}\n")
-            f.write(f"Valid: {stats['valid']}\n")
-            f.write(f"Exact: {stats['exact']}\n")
-            f.write(f"CanExact: {stats['can_exact']}\n")
-            f.write(f"MeanEditDistance: {mean_ed:.3f}\n")
-            f.write(f"MeanCanEditDistance: {mean_can_ed:.3f}\n")
-        print(f"[INFO] Test results saved to {out_path}")
+            stats_block = (
+                "===\n"
+                f"Total: {stats['total']}\n"
+                f"Valid: {stats['valid']}\n"
+                f"Exact: {stats['exact']}\n"
+                f"CanExact: {stats['can_exact']}\n"
+                f"MeanEditDistance: {mean_ed:.3f}\n"
+                f"MeanCanEditDistance: {mean_can_ed:.3f}\n"
+            )
+            f.write(stats_block)
+            # flog.write(stats_block)
+        print(f"[INFO] Test results saved to {out_path}\n[INFO] Run log saved to {run_log_append_path}")
         return
 
     if args.gen_vocab:
@@ -430,12 +461,6 @@ def main():
     # --- Build model ---
     if args.model_type == 'vaenovo':
         print("[INFO] Using VAENovo: minimal LSTM-based VAE for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
-        import torch
-        import torch.nn.functional as F
-        from model import VAENovo
-        from apetokenizer.ape_tokenizer import APETokenizer
-        import selfies
-        import sys
         # Require vocab file
         if not args.vocab_file:
             print("[ERROR] --vocab_file must be provided for vaenovo with real APETokenizer vocab.")
