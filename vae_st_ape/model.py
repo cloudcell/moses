@@ -392,34 +392,34 @@ class VAEDummy2(nn.Module):
         device = device or self.device
         return torch.tensor(ids, dtype=torch.long, device=device)
 
-    def tensor2string(self, token_ids, tokenizer):
+    def tensor2string(self, token_ids, tokenizer, debug=False):
         """
         Convert token ids to tokens, join to SELFIES, decode to SMILES. Prints all intermediate steps for debugging.
         """
         import selfies
         ids = token_ids.tolist() if hasattr(token_ids, 'tolist') else list(token_ids)
-        print(f"[tensor2string] token_ids: {ids}")
+        if debug: print(f"[tensor2string] token_ids: {ids}")
         tokens = tokenizer.convert_ids_to_tokens(ids)
-        print(f"[tensor2string] tokens: {tokens}")
+        if debug: print(f"[tensor2string] tokens: {tokens}")
         # Remove special tokens
         if hasattr(tokenizer, 'special_tokens') and tokenizer.special_tokens:
             special_tokens = set(tokenizer.special_tokens.keys())
         else:
             special_tokens = {'<unk>', '<pad>', '<s>', '</s>', '<mask>'}
         filtered_tokens = [tok for tok in tokens if tok not in special_tokens]
-        print(f"[tensor2string] filtered tokens: {filtered_tokens}")
+        if debug: print(f"[tensor2string] filtered tokens: {filtered_tokens}")
         selfies_str = ''.join(filtered_tokens)
-        print(f"[tensor2string] selfies_str: '{selfies_str}'")
+        if debug: print(f"[tensor2string] selfies_str: '{selfies_str}'")
         if not filtered_tokens:
-            print("[tensor2string][WARNING] All tokens filtered out as special tokens. Trying with unfiltered tokens.")
+            if debug: print("[tensor2string][WARNING] All tokens filtered out as special tokens. Trying with unfiltered tokens.")
             selfies_str = ''.join(tokens)
-            print(f"[tensor2string] selfies_str (unfiltered): '{selfies_str}'")
+            if debug: print(f"[tensor2string] selfies_str (unfiltered): '{selfies_str}'")
         try:
             smiles = selfies.decoder(selfies_str)
         except Exception as e:
-            print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
+            if debug: print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
             smiles = ''
-        print(f"[tensor2string] decoded SMILES: '{smiles}'")
+        if debug: print(f"[tensor2string] decoded SMILES: '{smiles}'")
         return smiles
 
 

@@ -1,27 +1,32 @@
+import os
 import torch
 from trainer import VAETrainer
-from model import VAE, VAEDummy, VAEDummy2
+from model import VAE, VAEDummy, VAEDummy2, VAENovo
 from config import get_default_config, get_vaedummy_config
 from data_loader import get_data_loaders
 from utils import Logger
 import argparse
 from tqdm import tqdm
-from rdkit import Chem
-from rdkit import RDLogger
-RDLogger.DisableLog('rdApp.*')
-# import random
-import numpy as np
-import datetime as dt
-from tqdm import tqdm
-import datetime as dt
-import os
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-import torch.nn.functional as F
-from model import VAENovo
-from apetokenizer.ape_tokenizer import APETokenizer
-import selfies
-import sys
 
+from rdkit import Chem, RDLogger
+import numpy as np
+import datetime
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+
+import torch.nn.functional as F
+import inspect
+import sys
+import selfies
+from apetokenizer.ape_tokenizer import APETokenizer
+import collections
+
+import shutil
+import random
+from huggingface_hub import hf_hub_download
+from load_hf_vocab import extract_hf_vocab
+
+RDLogger.DisableLog('rdApp.*')
 
 # Load SMILES from a text file (one per line)
 def load_smiles_file(path, limit=None):
@@ -54,16 +59,14 @@ def main():
 
     
     if args.model_type == 'vaedummy2':
+
         
         cfg = get_vaedummy_config()
 
         print("[INFO] Using VAEDummy2: LSTM model for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
         # --- Logging config and args ---
-        import inspect
-        import sys
-        import datetime as dt
-        import os
-        timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         results_dir = "test_results"
         os.makedirs(results_dir, exist_ok=True)
         run_log_path = os.path.join(results_dir, f"run_log_{timestamp}.txt")
@@ -78,12 +81,7 @@ def main():
         # Save path for later appending
         run_log_append_path = run_log_path
 
-        import torch
-        import torch.nn.functional as F
-        from model import VAEDummy2
-        from apetokenizer.ape_tokenizer import APETokenizer
-        import selfies
-        import sys
+
         # Require vocab file
         if not args.vocab_file:
             print("[ERROR] --vocab_file must be provided for vaedummy2 with real APETokenizer vocab.")
@@ -145,12 +143,11 @@ def main():
                 break
         # Evaluate on test set, save results
         model.eval()
-        timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         results_dir = "test_results"
         # os.makedirs(results_dir, exist_ok=True)
         out_path = run_log_path
-        from rdkit import Chem
-        import collections
+
         with torch.no_grad(), open(out_path, 'a') as f:  
             #, open(run_log_append_path, 'a') as flog:
             stats = collections.Counter()
@@ -166,7 +163,6 @@ def main():
                 input_tokens = t.squeeze(0).tolist()
                 recon_tokens = out_ids.tolist()
                 def edit_distance(a, b):
-                    import numpy as np
                     dp = np.zeros((len(a)+1, len(b)+1), dtype=int)
                     for i in range(len(a)+1): dp[i,0]=i
                     for j in range(len(b)+1): dp[0,j]=j
@@ -232,8 +228,6 @@ def main():
 
     if args.gen_vocab:
         # Train tokenizer from all data and save vocab
-        from apetokenizer.ape_tokenizer import APETokenizer
-        import selfies
         train_smiles = load_smiles_file('data_trn.txt')
         val_smiles = load_smiles_file('data_val.txt')
         test_smiles = load_smiles_file('data_tst.txt')
@@ -256,12 +250,10 @@ def main():
         return
 
     # --- Load APETokenizer vocab ---
-    from apetokenizer.ape_tokenizer import APETokenizer
     if args.vocab_file is not None:
         vocab_path = args.vocab_file
         print(f"Loading APETokenizer vocab from file: {vocab_path}")
     else:
-        import os
         local_dir = os.path.join(os.path.dirname(__file__), 'downloaded')
         os.makedirs(local_dir, exist_ok=True)
         local_vocab_path = os.path.join(local_dir, 'tokenizer.json')
@@ -270,8 +262,6 @@ def main():
             vocab_path = local_vocab_path
         else:
             print("No vocab file supplied, downloading from HuggingFace Hub...")
-            from huggingface_hub import hf_hub_download
-            import shutil
             vocab_path = hf_hub_download(
                 repo_id="mikemayuare/SELFYAPE",
                 filename="tokenizer.json",
@@ -280,7 +270,6 @@ def main():
             print(f"Downloaded vocab to: {vocab_path}")
             print(f"Copied vocab to local path: {local_vocab_path}")
             vocab_path = local_vocab_path
-    from load_hf_vocab import extract_hf_vocab
     tokenizer = APETokenizer()
     # Use wrapper to extract vocab if needed, then set directly
     vocab_dict = extract_hf_vocab(vocab_path)
@@ -291,27 +280,14 @@ def main():
     # Set thread count if using CPU
     if args.device == 'cpu':
         torch.set_num_threads(126)
-    
-    import torch
-    import numpy as np
-    # torch.manual_seed(args.seed)
-    # torch.cuda.manual_seed(args.seed)
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
-    # random.seed(args.seed)
-    # np.random.seed(args.seed)
 
     def seed_everything(seed: int):
-        import os, random, numpy as np, torch
-
         os.environ["PYTHONHASHSEED"] = str(seed)  # must come before heavy imports
         random.seed(seed)
         np.random.seed(seed)
-
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)          # for multi-GPU
-
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True)
@@ -490,11 +466,11 @@ def main():
         for i, t in enumerate(token_tensors):
             padded[i, :t.size(0)] = t
         loader = torch.utils.data.DataLoader(padded, batch_size=16, shuffle=True)
-        from tqdm import tqdm
+        
         import datetime as dt
-        import os
+        
         opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        from torch.optim.lr_scheduler import ReduceLROnPlateau
+        
         scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.99, patience=6, min_lr=1e-7)
         tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
         from misc import KLAnnealer
@@ -544,12 +520,12 @@ def main():
                 break
         # Evaluate on test set, save results
         model.eval()
-        timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         results_dir = "test_results"
         os.makedirs(results_dir, exist_ok=True)
         out_path = os.path.join(results_dir, f"test_results_vaenovo_{timestamp}.txt")
         from rdkit import Chem
-        import collections
+        
         with torch.no_grad(), open(out_path, 'w') as f:
             stats = collections.Counter()
             edit_distances = []
@@ -613,7 +589,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr_start)
     from misc import KLAnnealer
     kl_annealer = KLAnnealer(args.epochs, config)
-    import os, glob
+    # , glob
     checkpoint_dir = os.path.join(os.path.dirname(__file__), 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
     best_val_loss = float('inf')
@@ -639,7 +615,7 @@ def main():
 
     logger = Logger()
     end_epoch = start_epoch + args.epochs
-    from torch.optim.lr_scheduler import ReduceLROnPlateau
+    
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=config.lr_factor, patience=config.lr_patience, min_lr=config.lr_end)
     # Restore scheduler state if present
     if 'scheduler_state_dict' in metadata:
@@ -648,7 +624,7 @@ def main():
     trainer.fit(model, train_loader, val_loader, logger=logger, epochs=args.epochs, lr=config.lr_start, scheduler=scheduler, checkpoint_dir=checkpoint_dir, start_epoch=start_epoch, min_loss=args.min_loss)
      
     # save log with a timestamp
-    timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.save(f'train_log_{timestamp}.csv')
 
     # After training, evaluate on test set
@@ -715,7 +691,7 @@ def main():
     current_epoch = start_epoch if 'start_epoch' in locals() else 0
     # Make epoch numbering 1-based and zero-padded to 5 digits
     epoch_str = f"{current_epoch+1:05d}"
-    now = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    now = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     log_filename = f"epoch_{epoch_str}_{now}.log"
     log_path = os.path.join(log_dir, log_filename)
 
@@ -825,9 +801,7 @@ def main():
 
 if __name__ == '__main__':
     main()
-
     # After training: if single_batch, print input and reconstructions
-    import sys
     if '--single_batch' in sys.argv:
         try:
             print("\n[SINGLE BATCH DEBUG] Printing input and reconstructed SMILES after training:")
