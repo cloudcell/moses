@@ -43,3 +43,24 @@ class VAEConfig:
 
 def get_default_config():
     return VAEConfig()
+
+
+#   emb_dim=cfg.emb_dim, # 512*2, 
+#   hidden_dim=cfg.hidden_dim, # 128 *2, 
+#   num_layers=cfg.num_layers, # 1, 
+#   max_len=cfg.max_len, # 24, 
+#   enc_dropout=cfg.enc_dropout, # 0.1, 
+#   dec_dropout=cfg.dec_dropout # 0.1
+
+
+class VAEDummyConfig:
+    def __init__(self):
+        self.max_len = 24
+        self.emb_dim = 512*2
+        self.hidden_dim = 128 *2
+        self.num_layers = 1
+        self.enc_dropout = 0.1
+        self.dec_dropout = 0.1
+        
+def get_vaedummy_config():
+    return VAEDummyConfig()

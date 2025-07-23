@@ -1,7 +1,7 @@
 import torch
 from trainer import VAETrainer
 from model import VAE, VAEDummy, VAEDummy2
-from config import get_default_config
+from config import get_default_config, get_vaedummy_config
 from data_loader import get_data_loaders
 from utils import Logger
 import argparse
@@ -44,6 +44,10 @@ def main():
 
     
     if args.model_type == 'vaedummy2':
+        
+        cfg = get_vaedummy_config()
+
+
         print("[INFO] Using VAEDummy2: LSTM model for SMILES→SELFIES→tokens (APETokenizer)→reconstruction.")
         import torch
         import torch.nn.functional as F
@@ -73,7 +77,14 @@ def main():
         device = torch.device(args.device)
         # model = VAEDummy2(vocab_size=vocab_size, emb_dim=256*2, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442
         # model = VAEDummy2(vocab_size=vocab_size, emb_dim=1024, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442 -- main
-        model = VAEDummy2(vocab_size=vocab_size, emb_dim=512*2, hidden_dim=128 *2, num_layers=1, max_len=24, enc_dropout=0.1, dec_dropout=0.1).to(device)
+        model = VAEDummy2(vocab_size=vocab_size, 
+                          emb_dim=cfg.emb_dim, 
+                          hidden_dim=cfg.hidden_dim, 
+                          num_layers=cfg.num_layers, 
+                          max_len=cfg.max_len, 
+                          enc_dropout=cfg.enc_dropout, 
+                          dec_dropout=cfg.dec_dropout
+                          ).to(device)
         # Prepare tokenized training set
         token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
         max_len = max(t.size(0) for t in token_tensors)
