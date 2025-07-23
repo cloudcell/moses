@@ -107,7 +107,8 @@ def main():
         model = VAEDummy2(vocab_size=vocab_size, 
                           emb_dim=cfg.emb_dim, 
                           hidden_dim=cfg.hidden_dim, 
-                          num_layers=cfg.num_layers, 
+                          num_layers_enc=cfg.num_layers_enc,
+                          num_layers_dec=cfg.num_layers_dec, 
                           max_len=cfg.max_len, 
                           enc_dropout=cfg.enc_dropout, 
                           dec_dropout=cfg.dec_dropout

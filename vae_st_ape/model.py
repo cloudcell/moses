@@ -296,7 +296,8 @@ class VAEDummy2(nn.Module):
         vocab_size: int,
         emb_dim: int = 512,
         hidden_dim: int = 256,
-        num_layers: int = 2,
+        num_layers_enc: int = 2,
+        num_layers_dec: int = 2,
         latent_dim: int = None,
         max_len: int = 24,
         enc_dropout: float = 0.1,
@@ -306,19 +307,21 @@ class VAEDummy2(nn.Module):
         self.vocab_size = vocab_size
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+        self.num_layers = num_layers_enc
+        self.num_layers_dec = num_layers_dec
         self.latent_dim = latent_dim or hidden_dim
         self.max_len = max_len
         self.sos_id = 0
 
 
         self.embedding = nn.Embedding(vocab_size, emb_dim)
-        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True, dropout=enc_dropout)
+        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers_enc, batch_first=True, dropout=enc_dropout)
         # self.enc_do = nn.Dropout(enc_dropout)
         self.to_latent = nn.Linear(hidden_dim, self.latent_dim)
-        self.latent2h = nn.Linear(self.latent_dim, hidden_dim * num_layers)
-        self.latent2c = nn.Linear(self.latent_dim, hidden_dim * num_layers)
-        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers, batch_first=True, dropout=dec_dropout)  # not using dropout in decoder
+        self.latent2h = nn.Linear(self.latent_dim, hidden_dim * num_layers_dec)
+        self.latent2c = nn.Linear(self.latent_dim, hidden_dim * num_layers_dec)
+
+        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers_dec, batch_first=True, dropout=dec_dropout)  # not using dropout in decoder
         # self.dec_do = nn.Dropout(dec_dropout)
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
         self._init_weights()
@@ -356,8 +359,8 @@ class VAEDummy2(nn.Module):
         
         B = z.size(0)
         max_len = max_len or self.max_len
-        h0 = self.latent2h(z).view(B, self.num_layers, self.hidden_dim).transpose(0, 1).contiguous()
-        c0 = self.latent2c(z).view(B, self.num_layers, self.hidden_dim).transpose(0, 1).contiguous()
+        h0 = self.latent2h(z).view(B, self.num_layers_dec, self.hidden_dim).transpose(0, 1).contiguous()
+        c0 = self.latent2c(z).view(B, self.num_layers_dec, self.hidden_dim).transpose(0, 1).contiguous()
         input_ids = torch.full((B, 1), self.sos_id, dtype=torch.long, device=z.device)
         logits_out = []
         for _ in range(max_len):
