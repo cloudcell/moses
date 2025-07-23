@@ -56,14 +56,14 @@ def get_default_config():
 class VAEDummyConfig:
     def __init__(self):
         self.max_len = 24
-        self.emb_dim = 256
-        self.hidden_dim = 128
+        self.emb_dim = 1024 
+        self.hidden_dim = 256 
         self.num_layers_enc = 1
         self.num_layers_dec = 1
         self.enc_dropout = 0.1 if self.num_layers_enc > 1 else 0.0
         self.dec_dropout = 0.1 if self.num_layers_dec > 1 else 0.0
-        self.lr_start = 1e-3
-        self.lr_end = 1e-8
+        self.lr_start = 0.001
+        self.lr_end = 1e-9
         self.lr_factor = 0.95
         self.lr_patience = 2
         

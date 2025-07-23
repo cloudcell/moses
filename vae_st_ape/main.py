@@ -57,6 +57,29 @@ def main():
     parser.add_argument('--min_loss', type=float, default=0.1, help='Minimum loss threshold for early stopping')
     args = parser.parse_args()
 
+    def edit_distance(a, b):
+        dp = np.zeros((len(a)+1, len(b)+1), dtype=int)
+        for i in range(len(a)+1): dp[i,0]=i
+        for j in range(len(b)+1): dp[0,j]=j
+        for i in range(1, len(a)+1):
+            for j in range(1, len(b)+1):
+                if a[i-1]==b[j-1]:
+                    dp[i,j]=dp[i-1,j-1]
+                else:
+                    dp[i,j]=1+min(dp[i-1,j],dp[i,j-1],dp[i-1,j-1])
+        return dp[len(a),len(b)]
+        
+    # Canonicalize SMILES using RDKit
+    def canonicalize(sm):
+        import rdkit.Chem as Chem
+        try:
+            m = Chem.MolFromSmiles(sm)
+            if m is None:
+                return ''
+            return Chem.MolToSmiles(m, canonical=True)
+        except Exception:
+            return ''
+
     
     if args.model_type == 'vaedummy2':
 
@@ -163,27 +186,8 @@ def main():
                 recon_smiles = model.tensor2string(out_ids, tokenizer)
                 input_tokens = t.squeeze(0).tolist()
                 recon_tokens = out_ids.tolist()
-                def edit_distance(a, b):
-                    dp = np.zeros((len(a)+1, len(b)+1), dtype=int)
-                    for i in range(len(a)+1): dp[i,0]=i
-                    for j in range(len(b)+1): dp[0,j]=j
-                    for i in range(1, len(a)+1):
-                        for j in range(1, len(b)+1):
-                            if a[i-1]==b[j-1]:
-                                dp[i,j]=dp[i-1,j-1]
-                            else:
-                                dp[i,j]=1+min(dp[i-1,j],dp[i,j-1],dp[i-1,j-1])
-                    return dp[len(a),len(b)]
+
                 ed = edit_distance(s, recon_smiles)
-                # Canonicalize SMILES using RDKit
-                def canonicalize(sm):
-                    try:
-                        m = Chem.MolFromSmiles(sm)
-                        if m is None:
-                            return ''
-                        return Chem.MolToSmiles(m, canonical=True)
-                    except Exception:
-                        return ''
                 can_s = canonicalize(s)
                 can_recon = canonicalize(recon_smiles)
                 can_ed = edit_distance(can_s, can_recon)
