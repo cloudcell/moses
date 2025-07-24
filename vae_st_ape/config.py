@@ -1,3 +1,5 @@
+import datetime
+
 class VAEConfig:
     """
     Configuration for VAE model. Add 'max_len' for maximum sequence length in tokens.
@@ -55,17 +57,24 @@ def get_default_config():
 
 class VAEDummyConfig:
     def __init__(self):
+        # start time
+        self.start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.use_lstm = False
         self.max_len = 24
-        self.emb_dim = 1024 
-        self.hidden_dim = 256 
+        self.emb_dim = 16384 // 2 * 3
+        self.hidden_dim = 1024
         self.num_layers_enc = 1
         self.num_layers_dec = 1
-        self.enc_dropout = 0.1 if self.num_layers_enc > 1 else 0.0
-        self.dec_dropout = 0.1 if self.num_layers_dec > 1 else 0.0
+        if self.use_lstm:
+            self.enc_dropout = 0.0 if self.num_layers_enc > 1 else 0.0
+            self.dec_dropout = 0.0 if self.num_layers_dec > 1 else 0.0
+        else:
+            self.enc_dropout = 0.0
+            self.dec_dropout = 0.0
         self.lr_start = 0.001
         self.lr_end = 1e-9
-        self.lr_factor = 0.95
-        self.lr_patience = 2
+        self.lr_factor = 0.98
+        self.lr_patience = 4
         
         
 def get_vaedummy_config():

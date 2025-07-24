@@ -1,4 +1,5 @@
 import os
+print("[DEBUG] main.py loaded and running")
 import torch
 from trainer import VAETrainer
 from model import VAE, VAEDummy, VAEDummy2, VAENovo
@@ -42,6 +43,33 @@ def load_smiles_file(path, limit=None):
 
 DEBUG = False
 
+
+# --- Model checkpoint saving at end of training ---
+def save_final_checkpoint(model, optimizer, epoch, val_loss, config):
+    # Use config.start_time as timestamp for the folder
+    timestamp = getattr(config, 'start_time', datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
+    print(f"[DEBUG] save_final_checkpoint: config.start_time = {getattr(config, 'start_time', None)}")
+    ckpt_dir = os.path.join(os.path.dirname(__file__), f'checkpoints_{timestamp}')
+    print(f"[DEBUG] Intended checkpoint directory: {ckpt_dir}")
+    try:
+        os.makedirs(ckpt_dir, exist_ok=True)
+        ckpt_path = os.path.join(ckpt_dir, f'model_final.pt')
+        print(f"[DEBUG] Saving checkpoint to {ckpt_path}")
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'metadata': {
+                'epoch': epoch,
+                'val_loss': val_loss,
+                'config': vars(config)
+            }
+        }, ckpt_path)
+        print(f"[CHECKPOINT] Final model saved to {ckpt_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to save checkpoint: {e}")
+
+
+
 def main():
     global DEBUG, model, single_train_batch, train_dataset, idx_to_token
     parser = argparse.ArgumentParser()
@@ -68,7 +96,7 @@ def main():
                 else:
                     dp[i,j]=1+min(dp[i-1,j],dp[i,j-1],dp[i-1,j-1])
         return dp[len(a),len(b)]
-        
+
     # Canonicalize SMILES using RDKit
     def canonicalize(sm):
         import rdkit.Chem as Chem
@@ -134,7 +162,8 @@ def main():
                           num_layers_dec=cfg.num_layers_dec, 
                           max_len=cfg.max_len, 
                           enc_dropout=cfg.enc_dropout, 
-                          dec_dropout=cfg.dec_dropout
+                          dec_dropout=cfg.dec_dropout,
+                          use_lstm=cfg.use_lstm
                           ).to(device)
         # Prepare tokenized training set
         token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
@@ -146,6 +175,9 @@ def main():
         opt = torch.optim.Adam(model.parameters(), lr=cfg.lr_start)
         scheduler = ReduceLROnPlateau(opt, mode='min', factor=cfg.lr_factor, patience=cfg.lr_patience, min_lr=cfg.lr_end)
         tqdm_bar_args = dict(leave=True, ascii=True, ncols=100, dynamic_ncols=True)
+        from torch.utils.tensorboard import SummaryWriter
+        writer = SummaryWriter(log_dir=f'runs/vaedummy2_{timestamp}')
+        best_val_loss = float('inf')
         for epoch in range(args.epochs):
             epoch_loss = 0.0
             pbar = tqdm(loader, desc=f"Epoch {epoch}", **tqdm_bar_args)
@@ -162,11 +194,18 @@ def main():
             scheduler.step(epoch_loss)
             current_lr = opt.param_groups[0]['lr']
             print(f"[LR] Epoch {epoch+1}: lr={current_lr:.8f}")
+            writer.add_scalar('Loss/train', epoch_loss, epoch)
+            if epoch_loss < best_val_loss:
+                best_val_loss = epoch_loss
+            writer.add_scalar('Loss/best_val', best_val_loss, epoch)
             if epoch_loss < args.min_loss:
                 print(f"[EARLY STOP] Stopping training at epoch {epoch+1} due to min_loss criterion: {epoch_loss:.8f} < {args.min_loss}")
                 break
+        writer.close()
         # Evaluate on test set, save results
         model.eval()
+        end_epoch = epoch + 1  # Track number of epochs actually run
+
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         results_dir = "test_results"
         # os.makedirs(results_dir, exist_ok=True)
@@ -229,6 +268,8 @@ def main():
             f.write(stats_block)
             # flog.write(stats_block)
         print(f"[INFO] Test results saved to {out_path}\n[INFO] Run log saved to {run_log_append_path}")
+        print("[DEBUG] About to save checkpoint before return (VAEDummy2)")
+        save_final_checkpoint(model, opt, end_epoch, best_val_loss, cfg)
         return
 
     if args.gen_vocab:
@@ -620,14 +661,18 @@ def main():
 
     logger = Logger()
     end_epoch = start_epoch + args.epochs
-    
+   
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=config.lr_factor, patience=config.lr_patience, min_lr=config.lr_end)
     # Restore scheduler state if present
     if 'scheduler_state_dict' in metadata:
         scheduler.load_state_dict(metadata['scheduler_state_dict'])
     trainer = VAETrainer(config)
     trainer.fit(model, train_loader, val_loader, logger=logger, epochs=args.epochs, lr=config.lr_start, scheduler=scheduler, checkpoint_dir=checkpoint_dir, start_epoch=start_epoch, min_loss=args.min_loss)
-     
+
+    # Save final checkpoint after training
+    print("[DEBUG] Training complete, about to call save_final_checkpoint")
+    save_final_checkpoint(model, optimizer, end_epoch, best_val_loss, config)
+
     # save log with a timestamp
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.save(f'train_log_{timestamp}.csv')

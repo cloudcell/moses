@@ -12,3 +12,4 @@ venv
 *.log
 *.png
 *.json
+events.*

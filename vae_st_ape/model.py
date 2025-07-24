@@ -302,6 +302,7 @@ class VAEDummy2(nn.Module):
         max_len: int = 24,
         enc_dropout: float = 0.1,
         dec_dropout: float = 0.1,
+        use_lstm: bool = False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -312,25 +313,44 @@ class VAEDummy2(nn.Module):
         self.latent_dim = latent_dim or hidden_dim
         self.max_len = max_len
         self.sos_id = 0
+        self.use_lstm = use_lstm
 
 
         self.embedding = nn.Embedding(vocab_size, emb_dim)
-        self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers_enc, batch_first=True, dropout=enc_dropout)
+        
+        if self.use_lstm:
+            self.encoder = nn.LSTM(emb_dim, hidden_dim, num_layers_enc, batch_first=True, dropout=enc_dropout)
+        else:
+            self.encoder = nn.GRU(emb_dim, hidden_dim, num_layers_enc, batch_first=True, dropout=enc_dropout)
+
+
         # self.enc_do = nn.Dropout(enc_dropout)
         self.to_latent = nn.Linear(hidden_dim, self.latent_dim)
         self.latent2h = nn.Linear(self.latent_dim, hidden_dim * num_layers_dec)
-        self.latent2c = nn.Linear(self.latent_dim, hidden_dim * num_layers_dec)
+    
+        if self.use_lstm:
+            self.latent2c = nn.Linear(self.latent_dim, hidden_dim * num_layers_dec)
 
-        self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers_dec, batch_first=True, dropout=dec_dropout)  # not using dropout in decoder
+        if self.use_lstm:
+            self.decoder = nn.LSTM(emb_dim, hidden_dim, num_layers_dec, batch_first=True, dropout=dec_dropout)  # not using dropout in decoder
+        else:
+            self.decoder = nn.GRU(emb_dim, hidden_dim, num_layers_dec, batch_first=True, dropout=dec_dropout)  # not using dropout in decoder
         # self.dec_do = nn.Dropout(dec_dropout)
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
         self._init_weights()
 
     def _init_weights(self):
         nn.init.uniform_(self.embedding.weight, -0.1, 0.1)
-        for lin in (self.to_latent, self.latent2h, self.latent2c, self.fc_out):
+
+        if self.use_lstm:
+            nn.init.uniform_(self.latent2c.weight, -0.1, 0.1)
+            nn.init.zeros_(self.latent2c.bias)
+        
+        for lin in (self.to_latent, self.latent2h, self.fc_out):
             nn.init.xavier_uniform_(lin.weight)
             nn.init.zeros_(lin.bias)
+
+
         for rnn in (self.encoder, self.decoder):
             for name, p in rnn.named_parameters():
                 if "weight" in name:
@@ -344,7 +364,10 @@ class VAEDummy2(nn.Module):
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         emb = self.embedding(x)
-        _, (h_n, _) = self.encoder(emb)
+        if self.use_lstm:
+            _, (h_n, _) = self.encoder(emb)
+        else:
+            _, h_n = self.encoder(emb)
         h_last = h_n[-1]
 
         # h_last = self.enc_do(h_last) # added dropout instead of LSTM dropout
@@ -360,12 +383,20 @@ class VAEDummy2(nn.Module):
         B = z.size(0)
         max_len = max_len or self.max_len
         h0 = self.latent2h(z).view(B, self.num_layers_dec, self.hidden_dim).transpose(0, 1).contiguous()
-        c0 = self.latent2c(z).view(B, self.num_layers_dec, self.hidden_dim).transpose(0, 1).contiguous()
+
+        if self.use_lstm:
+            c0 = self.latent2c(z).view(B, self.num_layers_dec, self.hidden_dim).transpose(0, 1).contiguous()
+        else:
+            c0 = None
+
         input_ids = torch.full((B, 1), self.sos_id, dtype=torch.long, device=z.device)
         logits_out = []
         for _ in range(max_len):
             emb = self.embedding(input_ids)
-            output, (h0, c0) = self.decoder(emb, (h0, c0))
+            if self.use_lstm:
+                output, (h0, c0) = self.decoder(emb, (h0, c0))
+            else:
+                output, h0 = self.decoder(emb, h0)
             step_logits = self.fc_out(output[:, -1, :])
             logits_out.append(step_logits.unsqueeze(1))
             input_ids = step_logits.argmax(-1, keepdim=True)
