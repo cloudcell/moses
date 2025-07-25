@@ -61,8 +61,8 @@ class VAEDummyConfig:
         self.start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.use_lstm = False
         self.max_len = 24
-        self.emb_dim = 16384 // 2 * 3
-        self.hidden_dim = 1024
+        self.emb_dim = 1024 * 16 
+        self.hidden_dim = 1024 # // 4 * 3
         self.num_layers_enc = 1
         self.num_layers_dec = 1
         if self.use_lstm:
@@ -75,6 +75,7 @@ class VAEDummyConfig:
         self.lr_end = 1e-9
         self.lr_factor = 0.98
         self.lr_patience = 4
+        self.vocab_file = "./downloaded/tokenizer_64.json"
         
         
 def get_vaedummy_config():

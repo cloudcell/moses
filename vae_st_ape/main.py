@@ -133,13 +133,14 @@ def main():
         run_log_append_path = run_log_path
 
 
-        # Require vocab file
-        if not args.vocab_file:
-            print("[ERROR] --vocab_file must be provided for vaedummy2 with real APETokenizer vocab.")
+        # Require vocab file to be found at cfg.vocab_file (if not, exit)
+        if not os.path.exists(cfg.vocab_file):
+            print("[ERROR] vocab_file must exist for vaedummy2 with real APETokenizer vocab.")
             sys.exit(1)
-        print(f"[INFO] Loading APETokenizer vocab from {args.vocab_file}")
+
+        print(f"[INFO] Loading APETokenizer vocab from {cfg.vocab_file}")
         tokenizer = APETokenizer()
-        tokenizer.load_vocabulary(args.vocab_file)
+        tokenizer.load_vocabulary(cfg.vocab_file)
         print(f"[INFO] Loaded vocab size: {len(tokenizer)}")
         # Load SMILES from data files
         train_smiles = load_smiles_file('data_trn.txt')
@@ -186,6 +187,7 @@ def main():
                 loss = F.cross_entropy(logits.view(-1, vocab_size), batch.view(-1), ignore_index=tokenizer.pad_token_id)
                 opt.zero_grad()
                 loss.backward()
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 opt.step()
                 epoch_loss += loss.item() * batch.size(0)
                 avg_loss = epoch_loss / ((batch_idx+1) * batch.size(0))

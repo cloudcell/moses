@@ -26,6 +26,11 @@ for fname in DATA_FILES:
         all_smiles.extend(smiles)
 print(f"Total SMILES loaded: {len(all_smiles)}")
 
+# only unique SMILES
+all_smiles = list(set(all_smiles))
+print(f"Total unique SMILES: {len(all_smiles)}")
+
+
 # 3. Convert to SELFIES, skipping unconvertible ones
 all_selfies = []
 skipped = 0
@@ -38,10 +43,12 @@ for s in all_smiles:
         skipped += 1
 print(f"Total skipped SMILES: {skipped}")
 
+
+
 # 4. Train tokenizer
 print(f"Training tokenizer on {len(all_selfies)} molecules (SELFIES)...")
 tokenizer = APETokenizer()
-tokenizer.train(all_selfies, type="selfies")
+tokenizer.train(all_selfies, type="selfies", max_vocab_size=64)
 
 # 5. Output to ./tokenizers/tokenizer_<timestamp>.json
 os.makedirs("tokenizers", exist_ok=True)
