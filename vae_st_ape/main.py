@@ -147,11 +147,29 @@ def main():
         val_smiles = load_smiles_file('data_val.txt')
         test_smiles = load_smiles_file('data_tst.txt')
         print(f"[INFO] Loaded {len(train_smiles)} train, {len(val_smiles)} val, {len(test_smiles)} test molecules.")
+
+        # Filter invalid SMILES using RDKit
+        from rdkit import Chem
+        def is_valid_smiles(smiles):
+            mol = Chem.MolFromSmiles(smiles)
+            return mol is not None
+        n_train0, n_val0, n_test0 = len(train_smiles), len(val_smiles), len(test_smiles)
+        train_smiles = [s for s in train_smiles if is_valid_smiles(s)]
+        val_smiles = [s for s in val_smiles if is_valid_smiles(s)]
+        test_smiles = [s for s in test_smiles if is_valid_smiles(s)]
+        print(f"[INFO] Filtered: {n_train0-len(train_smiles)} invalid train, {n_val0-len(val_smiles)} invalid val, {n_test0-len(test_smiles)} invalid test SMILES.")
+
         # For fast debug, use only first 1000 train/val/test
-        N = 1000
-        train_smiles = train_smiles[:N]
-        val_smiles = val_smiles[:N]
-        test_smiles = test_smiles[:N]
+        if 0:
+            N = 1000
+            train_smiles = train_smiles[:N]
+            val_smiles = val_smiles[:N]
+            test_smiles = test_smiles[:N]
+        else:
+            train_smiles = train_smiles
+            val_smiles = val_smiles
+            test_smiles = test_smiles
+
         vocab_size = len(tokenizer)
         device = torch.device(args.device)
         # model = VAEDummy2(vocab_size=vocab_size, emb_dim=256*2, hidden_dim=128 * 2, num_layers=2, max_len=24).to(device)  # 442

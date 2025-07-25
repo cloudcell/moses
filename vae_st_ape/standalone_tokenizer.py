@@ -48,7 +48,7 @@ print(f"Total skipped SMILES: {skipped}")
 # 4. Train tokenizer
 print(f"Training tokenizer on {len(all_selfies)} molecules (SELFIES)...")
 tokenizer = APETokenizer()
-tokenizer.train(all_selfies, type="selfies", max_vocab_size=64)
+tokenizer.train(all_selfies, type="selfies", max_vocab_size=128)
 
 # 5. Output to ./tokenizers/tokenizer_<timestamp>.json
 os.makedirs("tokenizers", exist_ok=True)

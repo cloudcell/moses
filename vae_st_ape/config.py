@@ -75,7 +75,8 @@ class VAEDummyConfig:
         self.lr_end = 1e-9
         self.lr_factor = 0.98
         self.lr_patience = 4
-        self.vocab_file = "./downloaded/tokenizer_64.json"
+        # self.vocab_file = "./downloaded/tokenizer_64.json"
+        self.vocab_file = "./downloaded/tokenizer_128_20250726_060111.json"
         
         
 def get_vaedummy_config():
