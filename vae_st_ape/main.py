@@ -168,10 +168,11 @@ def main():
                           ).to(device)
         # Prepare tokenized training set
         token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
-        max_len = max(t.size(0) for t in token_tensors)
+        max_len = cfg.max_len
         padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
         for i, t in enumerate(token_tensors):
-            padded[i, :t.size(0)] = t
+            length = min(t.size(0), max_len)
+            padded[i, :length] = t[:length]
         loader = torch.utils.data.DataLoader(padded, batch_size=args.batch_size, shuffle=True, drop_last=True)
         opt = torch.optim.Adam(model.parameters(), lr=cfg.lr_start)
         scheduler = ReduceLROnPlateau(opt, mode='min', factor=cfg.lr_factor, patience=cfg.lr_patience, min_lr=cfg.lr_end)
