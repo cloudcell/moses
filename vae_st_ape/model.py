@@ -431,6 +431,8 @@ class VAEDummy2(nn.Module):
         Convert token ids to tokens, join to SELFIES, decode to SMILES. Prints all intermediate steps for debugging.
         """
         import selfies
+        custom_constraints = selfies.get_semantic_constraints('hypervalent')
+
         ids = token_ids.tolist() if hasattr(token_ids, 'tolist') else list(token_ids)
         if debug: print(f"[tensor2string] token_ids: {ids}")
         tokens = tokenizer.convert_ids_to_tokens(ids)
@@ -449,7 +451,7 @@ class VAEDummy2(nn.Module):
             selfies_str = ''.join(tokens)
             if debug: print(f"[tensor2string] selfies_str (unfiltered): '{selfies_str}'")
         try:
-            smiles = selfies.decoder(selfies_str)
+            smiles = selfies.decoder(selfies_str, custom_constraints=custom_constraints)
         except Exception as e:
             if debug: print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
             smiles = ''

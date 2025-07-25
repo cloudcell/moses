@@ -150,11 +150,10 @@ def main():
 
         # Filter invalid SMILES using RDKit
         from rdkit import Chem
-        excluded_smiles = ['c1cc(cc(c1)I(=O)=O)C(=O)[O-]']
-        
+       
         def is_valid_smiles(smiles):
             mol = Chem.MolFromSmiles(smiles)
-            return mol is not None and smiles not in excluded_smiles
+            return mol is not None
         n_train0, n_val0, n_test0 = len(train_smiles), len(val_smiles), len(test_smiles)
         train_smiles = [s for s in train_smiles if is_valid_smiles(s)]
         val_smiles = [s for s in val_smiles if is_valid_smiles(s)]
