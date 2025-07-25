@@ -376,12 +376,12 @@ class VAEDummy2(nn.Module):
         # z = self.enc_do(z)
         return z
 
-    def decode(self, z: torch.Tensor, max_len: int = None) -> torch.Tensor:
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
         
         # z = self.dec_do(z) # added dropout instead of LSTM dropout
         
         B = z.size(0)
-        max_len = max_len or self.max_len
+        
         h0 = self.latent2h(z).view(B, self.num_layers_dec, self.hidden_dim).transpose(0, 1).contiguous()
 
         if self.use_lstm:
@@ -391,7 +391,7 @@ class VAEDummy2(nn.Module):
 
         input_ids = torch.full((B, 1), self.sos_id, dtype=torch.long, device=z.device)
         logits_out = []
-        for _ in range(max_len):
+        for _ in range(self.max_len):
             emb = self.embedding(input_ids)
             if self.use_lstm:
                 output, (h0, c0) = self.decoder(emb, (h0, c0))
@@ -405,12 +405,12 @@ class VAEDummy2(nn.Module):
     def forward(self, x: torch.Tensor):
         z = self.encode(x)
         
-        logits = self.decode(z, max_len=x.size(1))
+        logits = self.decode(z)
         return logits, z
 
-    def sample(self, batch_size: int = 1, max_len: int = None) -> torch.Tensor:
+    def sample(self, batch_size: int = 1) -> torch.Tensor:
         z = torch.randn(batch_size, self.latent_dim, device=self.device)
-        logits = self.decode(z, max_len=max_len)
+        logits = self.decode(z)
         return logits.argmax(-1)                   # (B,T) integer IDs
 
 
