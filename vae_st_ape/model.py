@@ -421,7 +421,8 @@ class VAEDummy2(nn.Module):
         Returns a tensor of token ids.
         """
         import selfies
-        selfies_str = selfies.encoder(smiles)
+        # custom_constraints = selfies.get_semantic_constraints('hypervalent')
+        selfies_str = selfies.encoder(smiles, strict=False)
         ids = tokenizer.encode(selfies_str, add_special_tokens=True)
         device = device or self.device
         return torch.tensor(ids, dtype=torch.long, device=device)
@@ -431,7 +432,7 @@ class VAEDummy2(nn.Module):
         Convert token ids to tokens, join to SELFIES, decode to SMILES. Prints all intermediate steps for debugging.
         """
         import selfies
-        custom_constraints = selfies.get_semantic_constraints('hypervalent')
+        # custom_constraints = selfies.get_semantic_constraints('hypervalent')
 
         ids = token_ids.tolist() if hasattr(token_ids, 'tolist') else list(token_ids)
         if debug: print(f"[tensor2string] token_ids: {ids}")
@@ -451,7 +452,7 @@ class VAEDummy2(nn.Module):
             selfies_str = ''.join(tokens)
             if debug: print(f"[tensor2string] selfies_str (unfiltered): '{selfies_str}'")
         try:
-            smiles = selfies.decoder(selfies_str, custom_constraints=custom_constraints)
+            smiles = selfies.decoder(selfies_str, strict=False)
         except Exception as e:
             if debug: print(f"[Warning] Failed to decode SELFIES: '{selfies_str}'. Error: {e}")
             smiles = ''
