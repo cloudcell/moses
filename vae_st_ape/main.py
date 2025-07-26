@@ -184,10 +184,17 @@ def main():
                           enc_dropout=cfg.enc_dropout, 
                           dec_dropout=cfg.dec_dropout,
                           use_lstm=cfg.use_lstm
-                          ).to(device)
+                          )
+        if torch.cuda.device_count() > 1:
+            print(f"[INFO] Using {torch.cuda.device_count()} GPUs with DataParallel.")
+            model = torch.nn.DataParallel(model)
+        model = model.to(device)
+        
         # Prepare tokenized training set
-        token_tensors = [model.string2tensor(s, tokenizer, device=device) for s in train_smiles]
+        string2tensor_fn = model.module.string2tensor if hasattr(model, 'module') else model.string2tensor
+        token_tensors = [string2tensor_fn(s, tokenizer, device=device) for s in train_smiles]
         max_len = max(t.size(0) for t in token_tensors)
+
         padded = torch.full((len(token_tensors), max_len), tokenizer.pad_token_id, dtype=torch.long, device=device)
         for i, t in enumerate(token_tensors):
             padded[i, :t.size(0)] = t
@@ -240,7 +247,8 @@ def main():
             f.write("# VAEDummy2 Test Results\n")
             # flog.write("\n# VAEDummy2 Test Results\n")
             for i, s in enumerate(tqdm(test_smiles, desc="Testing", **tqdm_bar_args)):
-                t = model.string2tensor(s, tokenizer, device=device).unsqueeze(0)
+                string2tensor_fn = model.module.string2tensor if hasattr(model, 'module') else model.string2tensor
+                t = string2tensor_fn(s, tokenizer, device=device).unsqueeze(0)
                 out_logits, _ = model(t)
                 out_ids = torch.argmax(out_logits, dim=-1)[0]
                 recon_smiles = model.tensor2string(out_ids, tokenizer)
@@ -599,7 +607,8 @@ def main():
             can_edit_distances = []
             f.write("# VAENovo Test Results\n")
             for i, smi in enumerate(test_smiles):
-                tensor = model.string2tensor(smi, tokenizer, device=device)
+                string2tensor_fn = model.module.string2tensor if hasattr(model, 'module') else model.string2tensor
+                tensor = string2tensor_fn(smi, tokenizer, device=device)
                 tensor = tensor.unsqueeze(0)
                 recon_tokens = model.generate(tensor, device=device)
                 recon_smiles = model.tensor2string(recon_tokens[0], tokenizer)
@@ -774,7 +783,8 @@ def main():
             # use tqdm
             for idx in tqdm(random_indices):
                 s = test_smiles[idx]
-                input_tensor = model.string2tensor(s, device=args.device).unsqueeze(0)
+                string2tensor_fn = model.module.string2tensor if hasattr(model, 'module') else model.string2tensor
+                input_tensor = string2tensor_fn(s, device=args.device).unsqueeze(0)
                 # Assert every token is a known token
                 input_ids = input_tensor.squeeze(0).tolist()
                 vocab_ids = set(range(len(tokenizer)))
